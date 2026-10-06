@@ -119,6 +119,7 @@ const SYNC_WHITELIST = [
   "config.yaml",
 ];
 
+
 /** Build .gitignore: ignore all, then un-ignore whitelist entries. */
 function buildGitIgnore(): string {
   const lines = ["*"];
@@ -140,9 +141,7 @@ function isWhitelisted(filePath: string): boolean {
   }
   return false;
 }
-
 function bootstrap(): void {
-  // Verify git in PATH
   try {
     gitSync("--version");
   } catch {
@@ -203,9 +202,10 @@ function remoteHasCommits(): boolean {
 function syncPull(): void {
   try {
     gitSync("pull --rebase --autostash origin main");
-  } catch (e) {
+  } catch {
     try { gitSync("rebase --abort"); } catch { /* ignore */ }
-    throw e;
+    // Force: adopt remote state, discard local unpushed changes
+    gitSync("reset --hard origin/main");
   }
   injectShellPath();
 }
@@ -213,9 +213,10 @@ function syncPull(): void {
 async function asyncPull(): Promise<void> {
   try {
     await gitAsync("pull --rebase --autostash origin main");
-  } catch (e) {
+  } catch {
     try { await gitAsync("rebase --abort"); } catch { /* ignore */ }
-    throw e;
+    // Force: adopt remote state, discard local unpushed changes
+    await gitAsync("reset --hard origin/main");
   }
   injectShellPath();
 }
