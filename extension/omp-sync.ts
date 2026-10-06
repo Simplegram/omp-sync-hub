@@ -63,6 +63,7 @@ const BASE_FILES = [
   "config.yml",
   "config.yaml",
   "models.yml",
+  "models.db",
   "memory_summary.md",
 ];
 
