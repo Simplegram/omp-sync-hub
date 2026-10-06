@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as os from "node:os";
+import * as path from "node:path";
 import * as crypto from "node:crypto";
 
 // ---------------------------------------------------------------------------
@@ -16,23 +16,21 @@ const ENV_PATH = path.join(AGENT_DIR, ".env");
 function loadDotEnv(filePath: string): Record<string, string> {
   const result: Record<string, string> = {};
   if (!fs.existsSync(filePath)) return result;
-
   const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
-    const eqIdx = trimmed.indexOf("=");
-    if (eqIdx !== -1) {
-      const key = trimmed.slice(0, eqIdx).trim();
-      let value = trimmed.slice(eqIdx + 1).trim();
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
-      result[key] = value;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let val = trimmed.slice(eq + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
     }
+    result[key] = val;
   }
   return result;
 }
@@ -49,6 +47,16 @@ const DEVICE_ID = crypto
   .digest("hex")
   .slice(0, 10);
 const HOSTNAME = os.hostname();
+const USERNAME = process.env.USERNAME || os.hostname();
+
+// ---------------------------------------------------------------------------
+// 3. File groups
+// ---------------------------------------------------------------------------
+/** Groups that are safe to pull by default (no machine-specific paths). */
+const SAFE_GROUPS = ["config", "skills", "extensions"];
+
+/** All groups that can be explicitly pulled. */
+const ALL_GROUPS = ["config", "skills", "extensions", "sessions", "memories"];
 
 const TARGET_DIRECTORIES = ["skills", "extensions", "sessions", "memories"];
 const BASE_FILES = [
@@ -63,7 +71,7 @@ if (SYNC_AUTH_DB) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. File collection
+// 4. File collection
 // ---------------------------------------------------------------------------
 function getRelativeFiles(dir: string, baseDir = dir): string[] {
   let results: string[] = [];
@@ -84,7 +92,7 @@ function getRelativeFiles(dir: string, baseDir = dir): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Sync operations
+// 5. Sync operations
 // ---------------------------------------------------------------------------
 async function pushSync(): Promise<number> {
   if (!SERVER_URL || !SYNC_SECRET) return 0;
@@ -122,6 +130,7 @@ async function pushSync(): Promise<number> {
     body: JSON.stringify({
       device_id: DEVICE_ID,
       hostname: HOSTNAME,
+      username: USERNAME,
       os_info: `Windows (${os.release()})`,
       files: fileEntries,
     }),
@@ -131,10 +140,22 @@ async function pushSync(): Promise<number> {
   return fileEntries.length;
 }
 
-async function pullSync(): Promise<number> {
+/**
+ * Pull files from the server.
+ * @param groups – optional list of groups to pull. Defaults to SAFE_GROUPS.
+ */
+async function pullSync(groups?: string[]): Promise<number> {
   if (!SERVER_URL || !SYNC_SECRET) return 0;
 
-  const url = `${SERVER_URL}/api/sync/pull?device_id=${DEVICE_ID}&hostname=${encodeURIComponent(HOSTNAME)}`;
+  const groupList = groups && groups.length > 0 ? groups : SAFE_GROUPS;
+
+  const url =
+    `${SERVER_URL}/api/sync/pull` +
+    `?device_id=${encodeURIComponent(DEVICE_ID)}` +
+    `&username=${encodeURIComponent(USERNAME)}` +
+    `&hostname=${encodeURIComponent(HOSTNAME)}` +
+    `&groups=${encodeURIComponent(groupList.join(","))}`;
+
   const res = await fetch(url, {
     headers: { "x-sync-token": SYNC_SECRET },
   });
@@ -157,6 +178,26 @@ async function pullSync(): Promise<number> {
   return count;
 }
 
+/** Fetch the list of available groups and file counts from the server. */
+async function fetchAvailableGroups(): Promise<
+  Array<{ name: string; files: number }>
+> {
+  if (!SERVER_URL || !SYNC_SECRET) return [];
+
+  const url =
+    `${SERVER_URL}/api/sync/available` +
+    `?username=${encodeURIComponent(USERNAME)}`;
+
+  const res = await fetch(url, {
+    headers: { "x-sync-token": SYNC_SECRET },
+  });
+
+  if (!res.ok) throw new Error(`Available check failed HTTP ${res.status}`);
+  const data: { groups: Array<{ name: string; files: number }> } =
+    await res.json();
+  return data.groups;
+}
+
 async function testConnection(): Promise<string> {
   if (!SERVER_URL || !SYNC_SECRET)
     return "Not configured (missing OMP_SYNC_URL or OMP_SYNC_SECRET)";
@@ -174,7 +215,7 @@ async function testConnection(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Minimal ExtensionAPI interface (zero-dependency single-file extension)
+// 6. Minimal ExtensionAPI interface (zero-dependency single-file extension)
 // ---------------------------------------------------------------------------
 interface SyncUi {
   notify?: (msg: string, level?: string) => void;
@@ -184,8 +225,7 @@ interface SyncUi {
 interface SyncCommandContext {
   ui?: SyncUi;
 }
-
-type TimerHandle = ReturnType<typeof setTimeout>;
+type TimerHandle = NodeJS.Timeout;
 
 interface ExtensionLike {
   on: (event: string, handler: (...args: unknown[]) => void | Promise<void>) => void;
@@ -199,12 +239,12 @@ interface ExtensionLike {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Debounce state (module-level; cleared on session_shutdown)
+// 7. Debounce state (module-level; cleared on session_shutdown)
 // ---------------------------------------------------------------------------
 let debounceTimer: TimerHandle | undefined;
 
 // ---------------------------------------------------------------------------
-// 7. Extension entry point
+// 8. Extension entry point
 // ---------------------------------------------------------------------------
 export default function (pi: ExtensionLike): void {
   pi.on("session_start", async () => {
@@ -239,7 +279,8 @@ export default function (pi: ExtensionLike): void {
   });
 
   pi.registerCommand("sync", {
-    description: "Sync with hub: /sync [push|pull|test]",
+    description:
+      "Sync with hub: /sync [push|pull|select|test] [groups...]",
     handler: async (args: string, ctx: SyncCommandContext) => {
       if (!SERVER_URL || !SYNC_SECRET) {
         ctx.ui?.notify?.("[Sync Hub] Not configured. Create .env in your agent directory.");
@@ -247,18 +288,55 @@ export default function (pi: ExtensionLike): void {
       }
       ctx.ui?.setWorkingMessage?.("Syncing with hub...");
       try {
-        const cmd = args.trim().toLowerCase();
+        const trimmed = args.trim();
+        const parts = trimmed.split(/\s+/).filter(Boolean);
+        const cmd = (parts[0] || "").toLowerCase();
+
         if (cmd === "push") {
           const c = await pushSync();
           ctx.ui?.notify?.(`[Sync Hub] Pushed ${c} items to server.`);
         } else if (cmd === "pull") {
-          const c = await pullSync();
-          ctx.ui?.notify?.(`[Sync Hub] Pulled ${c} items from server.`);
+          const groupArg = (parts[1] || "").toLowerCase();
+          let groups: string[] | undefined;
+          if (groupArg === "all") {
+            groups = ALL_GROUPS;
+          } else if (groupArg) {
+            groups = groupArg.split(",").map((g) => g.trim()).filter(Boolean);
+          }
+          const c = await pullSync(groups);
+          const label = groups
+            ? groups.join(", ")
+            : SAFE_GROUPS.join(", ");
+          ctx.ui?.notify?.(`[Sync Hub] Pulled ${c} items (groups: ${label}).`);
+        } else if (cmd === "select") {
+          const available = await fetchAvailableGroups();
+          if (available.length === 0) {
+            ctx.ui?.notify?.("[Sync Hub] No groups found on server. Push first.");
+          } else {
+            const lines = available.map((g) => {
+              const safe = SAFE_GROUPS.includes(g.name) ? " (default)" : "";
+              return `  ${g.name} — ${g.files} files${safe}`;
+            });
+            ctx.ui?.notify?.(
+              `[Sync Hub] Available groups for ${USERNAME}:\n` +
+                lines.join("\n") +
+                `\n\nPull with: /sync pull <group1,group2,...>` +
+                `\nAll: /sync pull all`
+            );
+          }
         } else if (cmd === "test") {
           const result = await testConnection();
           ctx.ui?.notify?.(`[Sync Hub] ${result}`);
         } else {
-          ctx.ui?.notify?.("[Sync Hub] Usage: /sync [push|pull|test]");
+          ctx.ui?.notify?.(
+            "[Sync Hub] Usage:\n" +
+              "  /sync push              Push all files to server\n" +
+              "  /sync pull              Pull safe groups (config, skills, extensions)\n" +
+              "  /sync pull all          Pull everything including sessions, memories\n" +
+              "  /sync pull sessions     Pull specific groups (comma-separated)\n" +
+              "  /sync select            List available groups on server\n" +
+              "  /sync test              Test server connection"
+          );
         }
       } catch (err: unknown) {
         ctx.ui?.notify?.(`[Sync Hub Error] ${err instanceof Error ? err.message : String(err)}`);

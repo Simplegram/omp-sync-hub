@@ -1,12 +1,12 @@
 import os
-import json
-import sqlite3
 import base64
 import secrets
+import sqlite3
+import logging
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Depends
+from fastapi import FastAPI, Depends, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
@@ -31,24 +31,29 @@ security = HTTPBasic()
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS devices (
-            device_id TEXT PRIMARY KEY,
-            hostname TEXT,
-            os TEXT,
-            last_sync TIMESTAMP,
+            device_id  TEXT PRIMARY KEY,
+            hostname   TEXT,
+            os         TEXT,
+            username   TEXT,
+            last_sync  TIMESTAMP,
             sync_count INTEGER DEFAULT 0
         )
-    """)
-    cur.execute("""
+        """
+    )
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS sync_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            device_id TEXT,
-            action TEXT,
-            timestamp TIMESTAMP,
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id  TEXT,
+            action     TEXT,
+            timestamp  TIMESTAMP,
             files_count INTEGER
         )
-    """)
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -85,8 +90,28 @@ class SyncFile(BaseModel):
 class PushPayload(BaseModel):
     device_id: str
     hostname: str
+    username: str
     os_info: str
     files: List[SyncFile]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def user_storage_dir(username: str) -> str:
+    """Per-username storage root on the server."""
+    safe = username.replace("\\", "_").replace("/", "_")
+    d = os.path.join(STORAGE_DIR, safe)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def file_group(rel_path: str) -> str:
+    """Top-level path component, or 'config' for root-level files."""
+    parts = rel_path.replace("\\", "/").split("/")
+    if len(parts) == 1:
+        return "config"
+    return parts[0]
 
 
 # ---------------------------------------------------------------------------
@@ -100,20 +125,22 @@ def push_files(payload: PushPayload, token: None = Depends(verify_token)):
 
     cur.execute(
         """
-        INSERT INTO devices (device_id, hostname, os, last_sync, sync_count)
-        VALUES (?, ?, ?, ?, 1)
+        INSERT INTO devices (device_id, hostname, os, username, last_sync, sync_count)
+        VALUES (?, ?, ?, ?, ?, 1)
         ON CONFLICT(device_id) DO UPDATE SET
             hostname=excluded.hostname,
             os=excluded.os,
+            username=excluded.username,
             last_sync=excluded.last_sync,
             sync_count=sync_count + 1
         """,
-        (payload.device_id, payload.hostname, payload.os_info, now),
+        (payload.device_id, payload.hostname, payload.os_info, payload.username, now),
     )
 
+    storage_root = user_storage_dir(payload.username)
     for item in payload.files:
         rel_path = item.path.replace("\\", "/").strip("/")
-        dest_path = os.path.join(STORAGE_DIR, rel_path)
+        dest_path = os.path.join(storage_root, rel_path)
         dest_dir = os.path.dirname(dest_path)
         if dest_dir:
             os.makedirs(dest_dir, exist_ok=True)
@@ -134,12 +161,28 @@ def push_files(payload: PushPayload, token: None = Depends(verify_token)):
 # API – Pull
 # ---------------------------------------------------------------------------
 @app.get("/api/sync/pull")
-def pull_files(device_id: str, hostname: str = "unknown", token: None = Depends(verify_token)):
+def pull_files(
+    device_id: str,
+    username: str,
+    hostname: str = "unknown",
+    groups: Optional[str] = None,
+    token: None = Depends(verify_token),
+):
+    storage_root = user_storage_dir(username)
+    allowed_groups: Optional[set] = None
+    if groups:
+        allowed_groups = {g.strip() for g in groups.split(",") if g.strip()}
+
     files_to_send = []
-    for root, _, files in os.walk(STORAGE_DIR):
+    for root, _, files in os.walk(storage_root):
         for fname in files:
             full_path = os.path.join(root, fname)
-            rel_path = os.path.relpath(full_path, STORAGE_DIR).replace("\\", "/")
+            rel_path = os.path.relpath(full_path, storage_root).replace("\\", "/")
+
+            if allowed_groups is not None:
+                if file_group(rel_path) not in allowed_groups:
+                    continue
+
             stat = os.stat(full_path)
             with open(full_path, "rb") as f:
                 b64_content = base64.b64encode(f.read()).decode("ascii")
@@ -162,6 +205,30 @@ def pull_files(device_id: str, hostname: str = "unknown", token: None = Depends(
 
 
 # ---------------------------------------------------------------------------
+# API – Available groups
+# ---------------------------------------------------------------------------
+@app.get("/api/sync/available")
+def available_groups(
+    username: str,
+    token: None = Depends(verify_token),
+):
+    """List file groups and file counts available for the given username."""
+    storage_root = user_storage_dir(username)
+    group_counts: dict = {}
+    for root, _, files in os.walk(storage_root):
+        for fname in files:
+            full_path = os.path.join(root, fname)
+            rel_path = os.path.relpath(full_path, storage_root).replace("\\", "/")
+            g = file_group(rel_path)
+            group_counts[g] = group_counts.get(g, 0) + 1
+
+    groups = [
+        {"name": g, "files": c} for g, c in sorted(group_counts.items())
+    ]
+    return {"username": username, "groups": groups}
+
+
+# ---------------------------------------------------------------------------
 # API – Health
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
@@ -175,83 +242,55 @@ def health_check(token: None = Depends(verify_token)):
 @app.get("/", response_class=HTMLResponse)
 def get_dashboard(auth: None = Depends(verify_auth)):
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    devices = cur.execute("SELECT * FROM devices ORDER BY last_sync DESC").fetchall()
+    cur.execute(
+        "SELECT device_id, hostname, os, username, last_sync, sync_count FROM devices ORDER BY last_sync DESC"
+    )
+    devices = cur.fetchall()
+    cur.execute(
+        "SELECT device_id, action, timestamp, files_count FROM sync_history ORDER BY timestamp DESC LIMIT 50"
+    )
+    history = cur.fetchall()
     conn.close()
 
-    synced_items = []
-    for root, _, files in os.walk(STORAGE_DIR):
-        for fname in files:
-            p = os.path.join(root, fname)
-            rel = os.path.relpath(p, STORAGE_DIR).replace("\\", "/")
-            sz = os.path.getsize(p)
-            synced_items.append({"path": rel, "size": f"{sz / 1024:.2f} KB"})
-
-    dev_html = "".join(
-        f"""
-        <tr class="border-b border-zinc-800">
-            <td class="p-3 font-medium text-emerald-400">{d['hostname']}</td>
-            <td class="p-3 text-zinc-400">{d['os']}</td>
-            <td class="p-3 font-mono text-xs text-zinc-500">{d['device_id']}</td>
-            <td class="p-3 text-zinc-300">{d['last_sync']} UTC</td>
-            <td class="p-3 text-center">{d['sync_count']}</td>
-        </tr>
-    """
+    device_rows = "\n".join(
+        f"<tr><td>{d[0]}</td><td>{d[1]}</td><td>{d[2]}</td><td>{d[3] or '—'}</td><td>{d[4] or '—'}</td><td>{d[5]}</td></tr>"
         for d in devices
     )
-
-    items_html = "".join(
-        f"""
-        <tr class="border-b border-zinc-800 hover:bg-zinc-800/50">
-            <td class="p-2 font-mono text-xs text-zinc-200">{i['path']}</td>
-            <td class="p-2 font-mono text-xs text-zinc-500 text-right">{i['size']}</td>
-        </tr>
-    """
-        for i in synced_items
+    history_rows = "\n".join(
+        f"<tr><td>{h[0]}</td><td>{h[1]}</td><td>{h[2]}</td><td>{h[3]}</td></tr>"
+        for h in history
     )
 
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Oh My Pi Sync Hub</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-    </head>
-    <body class="bg-zinc-950 text-zinc-100 min-h-screen p-8">
-        <div class="max-w-6xl mx-auto space-y-6">
-            <div class="flex justify-between items-center border-b border-zinc-800 pb-4">
-                <div>
-                    <h1 class="text-2xl font-bold tracking-tight">Oh My Pi Sync Hub</h1>
-                    <p class="text-zinc-400 text-sm">Real-time instance synchronizer</p>
-                </div>
-                <span class="px-3 py-1 bg-emerald-950 text-emerald-400 border border-emerald-800 rounded-full text-xs font-semibold">Active</span>
-            </div>
-
-            <!-- Devices Panel -->
-            <div class="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-                <h2 class="text-md font-semibold text-zinc-300 mb-3">Connected Instances ({len(devices)})</h2>
-                <table class="w-full text-sm text-left">
-                    <thead class="text-xs uppercase bg-zinc-800 text-zinc-400">
-                        <tr><th class="p-3">Device / Host</th><th class="p-3">OS</th><th class="p-3">ID</th><th class="p-3">Last Synced</th><th class="p-3 text-center">Syncs</th></tr>
-                    </thead>
-                    <tbody>{dev_html if dev_html else '<tr><td colspan="5" class="p-4 text-center text-zinc-500">No instances registered</td></tr>'}</tbody>
-                </table>
-            </div>
-
-            <!-- Synced Inventory -->
-            <div class="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-                <h2 class="text-md font-semibold text-zinc-300 mb-3">Synced Files & Models ({len(synced_items)})</h2>
-                <div class="overflow-y-auto max-h-96">
-                    <table class="w-full text-sm text-left">
-                        <thead class="text-xs uppercase bg-zinc-800 text-zinc-400">
-                            <tr><th class="p-2">Relative Agent Path</th><th class="p-2 text-right">Size</th></tr>
-                        </thead>
-                        <tbody>{items_html if items_html else '<tr><td colspan="2" class="p-4 text-center text-zinc-500">No synced items found</td></tr>'}</tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Oh My Pi Sync Hub</title>
+    <style>
+        body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #0d1117; color: #c9d1d9; }}
+        h1 {{ color: #58a6ff; }}
+        table {{ border-collapse: collapse; width: 100%; margin-bottom: 2rem; }}
+        th, td {{ padding: 8px 12px; border: 1px solid #30363d; text-align: left; }}
+        th {{ background: #161b22; color: #58a6ff; }}
+        tr:nth-child(even) {{ background: #161b22; }}
+        .section {{ margin-bottom: 2rem; }}
+    </style>
+</head>
+<body>
+    <h1>Oh My Pi Sync Hub</h1>
+    <div class="section">
+        <h2>Devices</h2>
+        <table>
+            <thead><tr><th>ID</th><th>Hostname</th><th>OS</th><th>Username</th><th>Last Sync</th><th>Count</th></tr></thead>
+            <tbody>{device_rows}</tbody>
+        </table>
+    </div>
+    <div class="section">
+        <h2>Recent Activity</h2>
+        <table>
+            <thead><tr><th>Device</th><th>Action</th><th>Time</th><th>Files</th></tr></thead>
+            <tbody>{history_rows}</tbody>
+        </table>
+    </div>
+</body>
+</html>"""
