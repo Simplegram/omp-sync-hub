@@ -65,7 +65,7 @@ omp-sync-hub/
 ### Setup
 
 ```bash
-git clone https://github.com/<your-username>/omp-sync-hub.git
+git clone https://github.com/Simplegram/omp-sync-hub.git
 cd omp-sync-hub
 
 cp .env.example .env
@@ -96,7 +96,7 @@ docker compose up -d
 Open PowerShell on any Windows machine:
 
 ```powershell
-irm https://raw.githubusercontent.com/<OWNER>/omp-sync-hub/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/Simplegram/omp-sync-hub/main/scripts/install.ps1 | iex
 ```
 
 The script prompts for your server URL and secret, writes `%USERPROFILE%\.omp\agent\.env`, and downloads the extension into `%USERPROFILE%\.omp\agent\extensions\omp-sync.ts`.
@@ -104,7 +104,7 @@ The script prompts for your server URL and secret, writes `%USERPROFILE%\.omp\ag
 ### From a Cloned Repo
 
 ```powershell
-git clone https://github.com/<your-username>/omp-sync-hub.git
+git clone https://github.com/Simplegram/omp-sync-hub.git
 cd omp-sync-hub
 .\scripts\install.ps1 -ServerUrl http://<server-ip>:8000 -Secret <your-secret>
 ```
