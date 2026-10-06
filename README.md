@@ -69,7 +69,7 @@ cd omp-sync-hub
 
 The installer:
 1. Writes `~/.omp/agent/.env` with your `OMP_GIT_URL`
-2. Copies `omp-sync.ts` to `~/.omp/agent/extensions/`
+2. Copies `omp-sync.ts` to `~/.omp/agent/extensions/omp-sync/`
 
 ### 3. Launch omp
 
@@ -117,7 +117,7 @@ If you prefer not to use the installer:
 
 2. (Optional) Create `~/.omp/agent/.env.synced` with shared values (API keys, service endpoints) that should be available on all machines.
 
-3. Copy `extension/omp-sync.ts` to `~/.omp/agent/extensions/omp-sync.ts`.
+3. Copy `extension/omp-sync.ts` to `~/.omp/agent/extensions/omp-sync/omp-sync.ts`.
 
 4. Launch omp. The extension handles the rest.
 
@@ -143,6 +143,6 @@ omp-sync-hub/
 | `git not found in PATH` | Install git: `winget install Git.Git` (Windows) or `apt install git` / `brew install git` |
 | `Permission denied (publickey)` | Add your SSH key to GitHub, or use HTTPS URL in `OMP_GIT_URL` |
 | Remote repo doesn't exist | Create it: `gh repo create omp-agent-config --private` |
-| Extension not loading | Confirm file is at `~/.omp/agent/extensions/omp-sync.ts` and `.env` exists at `~/.omp/agent/.env` |
+| Extension not loading | Confirm file is at `~/.omp/agent/extensions/omp-sync/omp-sync.ts` and `.env` exists at `~/.omp/agent/.env` |
 | Push conflicts | The extension auto-rebases and retries once. If it fails, run `/sync pull` then `/sync push` |
 | Files not syncing | Check `.gitignore` in `~/.omp/agent/` isn't excluding them |

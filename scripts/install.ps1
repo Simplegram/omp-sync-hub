@@ -23,9 +23,15 @@ if (-not $GitUrl) {
 $AgentDir = Join-Path $env:USERPROFILE ".omp\agent"
 $ExtDir   = Join-Path $AgentDir "extensions"
 $EnvFile  = Join-Path $AgentDir ".env"
-$ExtFile  = Join-Path $ExtDir "omp-sync.ts"
+$ExtFile  = Join-Path $ExtDir "omp-sync\omp-sync.ts"
 
-New-Item -ItemType Directory -Force -Path $ExtDir | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $ExtDir "omp-sync") | Out-Null
+# Migrate from old flat location if it exists
+$OldExtFile = Join-Path $ExtDir "omp-sync.ts"
+if (Test-Path $OldExtFile) {
+    Remove-Item $OldExtFile -Force
+    Write-Host "  [OK] Removed old extension at $OldExtFile" -ForegroundColor Green
+}
 
 # 4. Write .env
 $EnvContent = "OMP_GIT_URL=$GitUrl`n"

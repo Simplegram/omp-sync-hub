@@ -14,9 +14,14 @@ fi
 AGENT_DIR="${HOME}/.omp/agent"
 EXT_DIR="${AGENT_DIR}/extensions"
 ENV_FILE="${AGENT_DIR}/.env"
-EXT_FILE="${EXT_DIR}/omp-sync.ts"
+EXT_FILE="${EXT_DIR}/omp-sync/omp-sync.ts"
 
-mkdir -p "$EXT_DIR"
+mkdir -p "${EXT_DIR}/omp-sync"
+# Migrate from old flat location if it exists
+if [[ -f "${EXT_DIR}/omp-sync.ts" ]]; then
+    rm "${EXT_DIR}/omp-sync.ts"
+    echo "  [OK] Removed old extension at ${EXT_DIR}/omp-sync.ts"
+fi
 
 # Write .env
 printf 'OMP_GIT_URL=%s\n' "$GIT_URL" > "$ENV_FILE"
