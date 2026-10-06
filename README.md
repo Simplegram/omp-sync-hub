@@ -1,200 +1,129 @@
 # omp-sync-hub
 
-Self-hosted synchronization server and Windows client extension for **Oh My Pi (omp)**. Keeps your agent configuration, models, skills, sessions, and (optionally) auth database in sync across all your machines through a single central server.
+Sync your Oh My Pi (omp) agent configuration, skills, and extensions across machines using a private Git repo. No server to run, no Docker, no custom API.
 
-## Architecture
+## How It Works
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                       omp-sync-hub                            │
-│                                                              │
-│  ┌──────────────┐         ┌──────────────────────────────┐  │
-│  │  Server      │  HTTP   │  Windows Client (omp)         │  │
-│  │  (Docker)    │◄───────►│  extension/omp-sync.ts        │  │
-│  │              │  base64 │                                │  │
-│  │  FastAPI     │  JSON   │  • Pull on session_start      │  │
-│  │  + SQLite    │         │  • Push on turn_end (2.5s)    │  │
-│  │  + Storage   │         │  • Push on session_shutdown   │  │
-│  │  + Dashboard │         │  • /sync [push|pull] command  │  │
-│  └──────────────┘         └──────────────────────────────┘  │
-│        │                                                     │
-│        ▼                                                     │
-│  ./data/sync.db         ./data/storage/                      │
-│  (devices, history)     (uploaded file tree)                 │
-└──────────────────────────────────────────────────────────────┘
-```
+A zero-dependency TypeScript extension (`omp-sync.ts`) is loaded by omp on every launch. It wraps your `~/.omp/agent/` directory in a git repo and syncs it to a private remote:
 
-- **Server** (`server/main.py`): FastAPI app with SQLite persistence. Serves a push/pull API (token-authenticated) and a web dashboard (Basic Auth, Tailwind CSS).
-- **Client** (`extension/omp-sync.ts`): Zero-dependency TypeScript extension loaded natively by omp. Reads `%USERPROFILE%\.omp\agent\.env` for credentials and syncs a defined set of files and directories.
+| Event | Action |
+|-------|--------|
+| `session_start` | `git pull --rebase --autostash origin main` (blocking) |
+| `turn_end` | Debounced 2.5s → async `git add -A && commit && push` (non-blocking) |
+| `session_shutdown` | Immediate `git add -A && commit && push` |
+| `/sync push` | Manual push |
+| `/sync pull` | Manual pull |
+| `/sync status` | Show `git status` + recent commits |
+| `/sync test` | Verify remote connectivity |
 
 ### What Gets Synced
 
-| Type | Paths |
-|------|-------|
-| Files | `models.yml`, `memory_summary.md` |
-| Files (optional) | `agent.db` (when `SYNC_AUTH_DB=true`) |
-| Folders (recursive) | `skills/`, `extensions/`, `sessions/`, `memories/` |
-| Always excluded | `.env`, `omp-sync.ts`, `config.yml`, `config.yaml` |
+Everything in `~/.omp/agent/` **except** what's in `.gitignore`:
+
+| Synced | Excluded |
+|--------|----------|
+| `config.yml`, `config.yaml`, `models.yml` | `.env` (contains git URL, secrets) |
+| `memory_summary.md` | `agent.db` + WAL/SHM files |
+| `skills/` (recursive) | `sessions/` |
+| `extensions/` (recursive) | `memories/` |
+| | `extensions/omp-sync.ts` (the extension itself) |
+
+`shellPath` in `config.yml` is preserved locally — it's in `.env` as `OMP_SHELL_PATH` if you need it across machines, or just leave it in `config.yml` since it's synced (the value is machine-specific but harmless on other OSes).
+
+## Setup
+
+### 1. Create a Private Git Repo
+
+```bash
+gh repo create omp-agent-config --private
+# or on GitHub: New Repository → omp-agent-config → Private
+```
+
+This repo stores your agent config data. It starts empty — the first machine to run omp will push its local files.
+
+### 2. Install the Client
+
+**Windows (one-liner):**
+```powershell
+irm https://raw.githubusercontent.com/Simplegram/omp-sync-hub/main/scripts/install.ps1 | iex
+```
+
+**Windows (from cloned repo):**
+```powershell
+git clone https://github.com/Simplegram/omp-sync-hub.git
+cd omp-sync-hub
+.\scripts\install.ps1 -GitUrl "git@github.com:Simplegram/omp-agent-config.git"
+```
+
+**Linux / macOS:**
+```bash
+curl -sL https://raw.githubusercontent.com/Simplegram/omp-sync-hub/main/scripts/install.sh | bash
+# or:
+git clone https://github.com/Simplegram/omp-sync-hub.git
+cd omp-sync-hub
+./scripts/install.sh git@github.com:Simplegram/omp-agent-config.git
+```
+
+The installer:
+1. Writes `~/.omp/agent/.env` with your `OMP_GIT_URL`
+2. Copies `omp-sync.ts` to `~/.omp/agent/extensions/`
+
+### 3. Launch omp
+
+On first launch the extension:
+- Verifies `git` is in PATH
+- Writes `.gitignore` to `~/.omp/agent/` (if missing)
+- Runs `git init -b main` (if not already a repo)
+- Sets local `user.name`/`user.email` (no global git config needed)
+- Adds the remote
+- If remote is empty: commits local files and pushes (first machine)
+- If remote has commits: pulls (subsequent machines)
+
+### 4. Add More Machines
+
+On each new machine, run the installer with the same `OMP_GIT_URL`. The extension will `git pull` on first launch and pick up all configs, skills, and extensions.
+
+## Client `.env` Reference
+
+| Variable | Description |
+|----------|-------------|
+| `OMP_GIT_URL` | Git remote URL (e.g. `git@github.com:user/repo.git` or `https://github.com/user/repo.git`) |
+| `OMP_SHELL_PATH` | Optional. Shell path to preserve if you want it in `.env` instead of `config.yml` |
+
+## Manual Setup
+
+If you prefer not to use the installer:
+
+1. Create `~/.omp/agent/.env`:
+   ```
+   OMP_GIT_URL=git@github.com:your-user/your-repo.git
+   ```
+
+2. Copy `extension/omp-sync.ts` to `~/.omp/agent/extensions/omp-sync.ts`.
+
+3. Launch omp. The extension handles the rest.
 
 ## Repository Structure
 
 ```
 omp-sync-hub/
 ├── .gitignore
-├── .env.example              # Server environment template
-├── docker-compose.yml
-├── Dockerfile
 ├── README.md
-├── server/
-│   ├── requirements.txt
-│   └── main.py               # FastAPI sync server + dashboard
 ├── extension/
 │   ├── omp-sync.ts           # Zero-dep TypeScript client extension
 │   └── client.env.example    # Client .env template
 └── scripts/
-    └── install.ps1           # One-step Windows client installer
+    ├── install.ps1           # Windows installer (PowerShell)
+    └── install.sh            # Linux/macOS installer (bash)
 ```
-
-## Server Deployment
-
-### Prerequisites
-
-- Docker + Docker Compose
-- A static IP or hostname reachable from your client machines
-
-### Setup
-
-```bash
-git clone https://github.com/Simplegram/omp-sync-hub.git
-cd omp-sync-hub
-
-cp .env.example .env
-# Edit .env – set SYNC_SECRET, DASHBOARD_USER, DASHBOARD_PASS, PORT
-nano .env
-
-docker compose up -d
-```
-
-### Verify
-
-- Dashboard: `http://<server-ip>:8000` (Basic Auth with your dashboard credentials)
-- API health: `curl -H "x-sync-token: <your-secret>" http://<server-ip>:8000/api/sync/pull?device_id=test&hostname=test`
-
-### Environment Variables (Server `.env`)
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `SYNC_SECRET` | Yes | Shared token for API auth (`x-sync-token` header) |
-| `DASHBOARD_USER` | Yes | Username for the web dashboard (Basic Auth) |
-| `DASHBOARD_PASS` | Yes | Password for the web dashboard |
-| `PORT` | No | Host port to expose (default `8000`) |
-
-## Windows Client Installation
-
-### One-Liner (recommended)
-
-Open PowerShell on any Windows machine:
-
-```powershell
-irm https://raw.githubusercontent.com/Simplegram/omp-sync-hub/main/scripts/install.ps1 | iex
-```
-
-The script prompts for your server URL and secret, writes `%USERPROFILE%\.omp\agent\.env`, and downloads the extension into `%USERPROFILE%\.omp\agent\extensions\omp-sync.ts`.
-
-### From a Cloned Repo
-
-```powershell
-git clone https://github.com/Simplegram/omp-sync-hub.git
-cd omp-sync-hub
-.\scripts\install.ps1 -ServerUrl http://<server-ip>:8000 -Secret <your-secret>
-```
-
-### Manual Setup
-
-1. Create the agent `.env` file:
-   ```powershell
-   @'
-   OMP_SYNC_URL=http://YOUR-SERVER-IP:8000
-   OMP_SYNC_SECRET=your-random-strong-secret-token
-   SYNC_AUTH_DB=true
-   '@ | Out-File -Encoding utf8 "$env:USERPROFILE\.omp\agent\.env"
-   ```
-
-2. Copy `extension/omp-sync.ts` to `%USERPROFILE%\.omp\agent\extensions\omp-sync.ts`.
-
-### Client `.env` Reference
-
-| Variable | Description |
-|----------|-------------|
-| `OMP_SYNC_URL` | Base URL of your sync server |
-| `OMP_SYNC_SECRET` | Must match the server's `SYNC_SECRET` |
-| `SYNC_AUTH_DB` | `true`/`false` – include `agent.db` in sync |
-
-## Sync Lifecycle
-
-| Event | Action |
-|-------|--------|
-| `session_start` | Non-blocking **pull** from server |
-| `turn_end` | Debounced **push** (2.5 s delay) to avoid flooding |
-| `session_shutdown` | Immediate synchronous **push** |
-| `/sync push` | Manual push (slash command) |
-| `/sync pull` | Manual pull (slash command) |
-
-## Dashboard
-
-Access at `http://<server-ip>:<port>` with your `DASHBOARD_USER` / `DASHBOARD_PASS` credentials.
-
-Shows:
-- **Connected Instances** – hostname, OS, device ID, last sync time, total sync count
-- **Synced Files** – full file inventory with paths and sizes
-
-## API Reference
-
-All API endpoints require the `x-sync-token` header matching `SYNC_SECRET`.
-
-### `POST /api/sync/push`
-
-```json
-{
-  "device_id": "a1b2c3d4e5",
-  "hostname": "WORKSTATION-01",
-  "os_info": "Windows (10.0.26200)",
-  "files": [
-    { "path": "config.yml", "content": "<base64>", "mtime": 1700000000.0 }
-  ]
-}
-```
-
-### `GET /api/sync/pull?device_id=<id>&hostname=<name>`
-
-Returns:
-```json
-{
-  "files": [
-    { "path": "config.yml", "content": "<base64>", "mtime": 1700000000.0 }
-  ],
-  "count": 1
-}
-```
-
-## Data Persistence
-
-All server data lives in `./data/` (mounted as `/data` in Docker):
-
-```
-data/
-├── sync.db           # SQLite: devices + sync_history tables
-└── storage/          # Uploaded file tree
-```
-
-Back up this directory to preserve device registrations, sync history, and all synced files.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| `401 Unauthorized` on API | Verify `x-sync-token` matches server `SYNC_SECRET` |
-| Dashboard asks for credentials | Use `DASHBOARD_USER` / `DASHBOARD_PASS` from `.env` |
-| Extension not loading | Confirm file is at `%USERPROFILE%\.omp\agent\extensions\omp-sync.ts` and `.env` exists at `%USERPROFILE%\.omp\agent\.env` |
-| Files not appearing on server | Check server is reachable; verify `OMP_SYNC_URL` in client `.env` |
-| `agent.db` not syncing | Set `SYNC_AUTH_DB=true` in client `.env` |
+| `git not found in PATH` | Install git: `winget install Git.Git` (Windows) or `apt install git` / `brew install git` |
+| `Permission denied (publickey)` | Add your SSH key to GitHub, or use HTTPS URL in `OMP_GIT_URL` |
+| Remote repo doesn't exist | Create it: `gh repo create omp-agent-config --private` |
+| Extension not loading | Confirm file is at `~/.omp/agent/extensions/omp-sync.ts` and `.env` exists at `~/.omp/agent/.env` |
+| Push conflicts | The extension auto-rebases and retries once. If it fails, run `/sync pull` then `/sync push` |
+| Files not syncing | Check `.gitignore` in `~/.omp/agent/` isn't excluding them |
