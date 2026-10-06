@@ -162,6 +162,14 @@ def pull_files(device_id: str, hostname: str = "unknown", token: None = Depends(
 
 
 # ---------------------------------------------------------------------------
+# API – Health
+# ---------------------------------------------------------------------------
+@app.get("/api/health")
+def health_check(token: None = Depends(verify_token)):
+    return {"status": "ok", "service": "omp-sync-hub"}
+
+
+# ---------------------------------------------------------------------------
 # Dashboard
 # ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
