@@ -31,10 +31,10 @@ Self-hosted synchronization server and Windows client extension for **Oh My Pi (
 
 | Type | Paths |
 |------|-------|
-| Files | `config.yml`, `config.yaml`, `models.yml`, `memory_summary.md` |
+| Files | `models.yml`, `memory_summary.md` |
 | Files (optional) | `agent.db` (when `SYNC_AUTH_DB=true`) |
 | Folders (recursive) | `skills/`, `extensions/`, `sessions/`, `memories/` |
-| Always excluded | `.env`, `omp-sync.ts` |
+| Always excluded | `.env`, `omp-sync.ts`, `config.yml`, `config.yaml` |
 
 ## Repository Structure
 
