@@ -318,45 +318,11 @@ function getSyncCompletions(arg: string): SyncCompletion[] | null {
   return m.length ? m : null;
 }
 
-// ---------------------------------------------------------------------------
-// 9. Debounce state (module-level; cleared on session_shutdown)
-// ---------------------------------------------------------------------------
-let debounceTimer: TimerHandle | undefined;
 
 // ---------------------------------------------------------------------------
 // 10. Extension entry point
 // ---------------------------------------------------------------------------
 export default function (pi: ExtensionLike): void {
-  pi.on("session_start", async () => {
-    if (!SERVER_URL || !SYNC_SECRET) return;
-    try {
-      await pullSync();
-    } catch {
-      // server may not have initial bundle yet
-    }
-  });
-
-  pi.on("turn_end", () => {
-    if (!SERVER_URL || !SYNC_SECRET) return;
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(async () => {
-      try {
-        await pushSync();
-      } catch {
-        // silent on background auto-sync
-      }
-    }, 2500);
-  });
-
-  pi.on("session_shutdown", async () => {
-    clearTimeout(debounceTimer);
-    if (!SERVER_URL || !SYNC_SECRET) return;
-    try {
-      await pushSync();
-    } catch {
-      // exit gracefully
-    }
-  });
 
   pi.registerCommand("sync", {
     description: "Sync with hub: /sync [push|pull|select|test] [groups...]",
