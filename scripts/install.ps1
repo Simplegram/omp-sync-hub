@@ -33,32 +33,31 @@ Set-Content -Path $EnvFile -Value $EnvContent -Encoding UTF8
 Write-Host "  [OK] Wrote $EnvFile" -ForegroundColor Green
 
 # 5. Install extension
-$ScriptPath = $MyInvocation.MyCommand.Path
-if ($ScriptPath) {
-    $ScriptDir   = Split-Path -Parent $ScriptPath
-    $RepoExtFile = Join-Path $ScriptDir "..\extension\omp-sync.ts"
-    if (Test-Path $RepoExtFile) {
-        Copy-Item -Path $RepoExtFile -Destination $ExtFile -Force
-        Write-Host "  [OK] Copied extension from local repo to $ExtFile" -ForegroundColor Green
-    } else {
-        Write-Warning "Local extension not found. Falling back to download."
-        Download-Extension $ExtFile
-    }
-} else {
-    Download-Extension $ExtFile
-}
+$ScriptRoot = $PSScriptRoot  # empty when piped via irm | iex
 
-function Download-Extension([string]$Target) {
+function Install-Extension([string]$Target) {
+    if ($ScriptRoot) {
+        $RepoExtFile = Join-Path $ScriptRoot "..\extension\omp-sync.ts"
+        if (Test-Path $RepoExtFile) {
+            Copy-Item -Path $RepoExtFile -Destination $Target -Force
+            Write-Host "  [OK] Copied extension from local repo to $Target" -ForegroundColor Green
+            return
+        }
+        Write-Warning "Local extension not found. Falling back to download."
+    }
     $RawUrl = "https://raw.githubusercontent.com/Simplegram/omp-sync-hub/main/extension/omp-sync.ts"
     Write-Host "  Downloading extension from $RawUrl ..." -ForegroundColor Cyan
     try {
         Invoke-WebRequest -Uri $RawUrl -OutFile $Target -UseBasicParsing
         Write-Host "  [OK] Downloaded extension to $Target" -ForegroundColor Green
     } catch {
-        Write-Warning "Could not download: $_"
-        Write-Warning "Manually copy extension/omp-sync.ts to $Target"
+        Write-Error "Failed to download extension from $RawUrl : $_"
+        Write-Error "Manually copy extension/omp-sync.ts to $Target"
+        exit 1
     }
 }
+
+Install-Extension $ExtFile
 
 # 6. Summary
 Write-Host ""
