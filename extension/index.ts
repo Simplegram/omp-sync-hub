@@ -188,9 +188,9 @@ function bootstrap(): void {
 }
 
 /** Returns true if the remote has at least one commit on main. */
-function remoteHasCommits(): boolean {
+async function remoteHasCommits(): Promise<boolean> {
   try {
-    return gitSync("ls-remote --heads origin main").length > 0;
+    return (await gitAsync("ls-remote --heads origin main")).length > 0;
   } catch {
     return false;
   }
@@ -254,11 +254,12 @@ async function asyncPush(): Promise<void> {
 // ---------------------------------------------------------------------------
 // 7. Minimal ExtensionAPI interfaces
 // ---------------------------------------------------------------------------
-interface SyncUi {
-  notify?: (msg: string, level?: string) => void;
-  setWorkingMessage?: (msg: string) => void;
+interface SyncCommandContext {
+  ui?: {
+    notify?: (msg: string, level?: string) => void;
+    setWorkingMessage?: (msg: string) => void;
+  };
 }
-interface SyncCommandContext { ui?: SyncUi }
 interface SyncCompletion {
   label: string;
   value: string;
@@ -276,16 +277,11 @@ interface ExtensionLike {
   ) => void;
 }
 
-// ---------------------------------------------------------------------------
-// 8. Tab completions
-// ---------------------------------------------------------------------------
-const SUBS: SyncCompletion[] = [
-  { label: "push", value: "push", description: "Commit & push to remote" },
-  { label: "pull", value: "pull", description: "Pull from remote" },
-  { label: "status", value: "status", description: "Git status + recent log" },
-  { label: "test", value: "test", description: "Verify remote connectivity" },
-];
-
+/** Print status: try UI notify, always log to console. */
+function status(ctx: SyncCommandContext, msg: string): void {
+  console.log(`[omp-sync] ${msg}`);
+  ctx.ui?.notify?.(msg);
+}
 function completions(arg: string): SyncCompletion[] | null {
   const t = (arg || "").trim().toLowerCase();
   if (t.includes(" ")) return null;
@@ -300,26 +296,29 @@ export default function (pi: ExtensionLike): void {
   let pushTimer: NodeJS.Timeout | undefined;
   const PUSH_DELAY = 2500;
 
-  // Synchronous bootstrap (fast, local-only) – failures are non-fatal
+  // Bootstrap (local-only, fast) – failures are non-fatal
   try {
     bootstrap();
   } catch (e) {
     console.error(`[omp-sync] bootstrap warning: ${e}`);
   }
 
-  // First-machine bootstrap: commit + push if remote is empty (async, non-blocking)
-  try {
-    if (GIT_URL && !remoteHasCommits()) {
-      asyncPush().catch((e) => console.error(`[omp-sync] initial push failed: ${e}`));
-    }
-  } catch { /* non-fatal */ }
-
+  // First-machine bootstrap: commit + push if remote is empty
+  if (GIT_URL) {
+    (async () => {
+      if (!await remoteHasCommits()) {
+        console.log("[omp-sync] Remote empty – initial push…");
+        await asyncPush();
+        console.log("[omp-sync] Initial push complete");
+      }
+    })().catch((e) => console.error(`[omp-sync] initial push failed: ${e}`));
+  }
 
   // --- Lifecycle hooks ---
 
   pi.on("session_start", () => {
     if (!GIT_URL) return;
-    try { syncPull(); } catch { /* non-blocking; next turn will retry */ }
+    asyncPull().catch(() => { /* non-blocking; next turn will retry */ });
   });
 
   pi.on("turn_end", () => {
@@ -334,7 +333,7 @@ export default function (pi: ExtensionLike): void {
   pi.on("session_shutdown", () => {
     if (pushTimer) { clearTimeout(pushTimer); pushTimer = undefined; }
     if (!GIT_URL) return;
-    try { syncPush(); } catch { /* best effort */ }
+    asyncPush().catch(() => { /* best effort */ });
   });
 
   // --- /sync command ---
@@ -344,36 +343,37 @@ export default function (pi: ExtensionLike): void {
     getArgumentCompletions: completions,
     handler: async (args: string, ctx: SyncCommandContext) => {
       if (!GIT_URL) {
-        ctx.ui?.notify?.("[sync] Not configured. Set OMP_GIT_URL in .env");
+        status(ctx, "Not configured. Set OMP_GIT_URL in .env");
         return;
       }
       const cmd = (args.trim().split(/\s+/)[0] || "").toLowerCase();
-      const log = (msg: string) => ctx.ui?.setWorkingMessage?.(msg);
 
       try {
         switch (cmd) {
           case "push":
-            log("[sync] Pushing…");
-            syncPush();
-            ctx.ui?.notify?.("[sync] Push complete");
+            status(ctx, "Pushing…");
+            await asyncPush();
+            status(ctx, "Push complete");
             break;
           case "pull":
-            log("[sync] Pulling…");
-            syncPull();
-            ctx.ui?.notify?.("[sync] Pull complete");
+            status(ctx, "Pulling…");
+            await asyncPull();
+            status(ctx, "Pull complete");
             break;
-          case "status":
-            const st = gitSync("status --short");
-            const recent = gitSync("log --oneline -5");
-            ctx.ui?.notify?.(`[sync]\n${st || "(clean)"}\n\n${recent}`);
+          case "status": {
+            const st = await gitAsync("status --short");
+            const recent = await gitAsync("log --oneline -5");
+            status(ctx, `Status:\n${st || "(clean)"}\n\nRecent:\n${recent}`);
             break;
+          }
           case "test":
-            gitSync("ls-remote --get-url origin");
-            ctx.ui?.notify?.(`[sync] Remote OK: ${GIT_URL}`);
+            await gitAsync("ls-remote --get-url origin");
+            status(ctx, `Remote OK: ${GIT_URL}`);
             break;
           default:
-            ctx.ui?.notify?.(
-              "[sync] Usage:\n" +
+            status(
+              ctx,
+              "Usage:\n" +
                 "  /sync push     Commit & push to remote\n" +
                 "  /sync pull     Pull from remote\n" +
                 "  /sync status   Show git status + recent commits\n" +
@@ -381,7 +381,7 @@ export default function (pi: ExtensionLike): void {
             );
         }
       } catch (e: unknown) {
-        ctx.ui?.notify?.(`[sync] Error: ${e instanceof Error ? e.message : String(e)}`);
+        status(ctx, `Error: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
   });
