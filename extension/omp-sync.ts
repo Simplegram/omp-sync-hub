@@ -106,6 +106,29 @@ function migrateShellPath(): void {
 // 4. Bootstrap: .gitignore, git init, remote, author, shellPath migration
 // ---------------------------------------------------------------------------
 const GITIGNORE = [
+  // Secrets & machine-specific
+  ".env",
+  // SQLite databases
+  "agent.db",
+  "agent.db-wal",
+  "agent.db-shm",
+  // Large / machine-local directories
+  "sessions/",
+  "memories/",
+  // The extension itself
+  "extensions/omp-sync.ts",
+  // Cache & temp
+  ".cache/",
+  "tmp/",
+  "*.log",
+  // OS junk
+  ".DS_Store",
+  "Thumbs.db",
+  "",
+].join("\n");
+
+/** Patterns to untrack from git index if previously committed. */
+const UNTRACK_PATTERNS = [
   ".env",
   "agent.db",
   "agent.db-wal",
@@ -113,8 +136,9 @@ const GITIGNORE = [
   "sessions/",
   "memories/",
   "extensions/omp-sync.ts",
-  "",
-].join("\n");
+  ".cache/",
+  "tmp/",
+];
 
 function bootstrap(): void {
   // Verify git in PATH
@@ -142,6 +166,17 @@ function bootstrap(): void {
   gitSync('config user.name "omp-sync"');
   gitSync('config user.email "omp-sync@local"');
 
+  // Untrack files that are now gitignored but were previously committed
+  const tracked = gitSync("ls-files");
+  const trackedList = tracked.split("\n").filter(Boolean);
+  for (const pattern of UNTRACK_PATTERNS) {
+    const toRemove = trackedList.filter((f) =>
+      pattern.endsWith("/") ? f.startsWith(pattern) : f === pattern,
+    );
+    if (toRemove.length > 0) {
+      gitSync(`rm --cached -- ${toRemove.map((f) => `"${f}"`).join(" ")}`);
+    }
+  }
   // Ensure remote
   if (!GIT_URL) return;
   try {

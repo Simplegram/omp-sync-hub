@@ -22,11 +22,12 @@ Everything in `~/.omp/agent/` **except** what's in `.gitignore`:
 
 | Synced | Excluded |
 |--------|----------|
-| `config.yml`, `config.yaml`, `models.yml` | `.env` (contains git URL, secrets) |
+| `config.yml`, `config.yaml`, `models.yml` | `.env` (machine-specific secrets) |
 | `memory_summary.md` | `agent.db` + WAL/SHM files |
-| `skills/` (recursive) | `sessions/` |
-| `extensions/` (recursive) | `memories/` |
-| | `extensions/omp-sync.ts` (the extension itself) |
+| `skills/` (recursive) | `sessions/`, `memories/` |
+| `extensions/` (recursive) | `extensions/omp-sync.ts` (the extension itself) |
+| | `.cache/`, `tmp/`, `*.log` |
+| | `.DS_Store`, `Thumbs.db` |
 
 `shellPath` in `config.yml` is automatically migrated to `.env` as `OMP_SHELL_PATH` on first bootstrap, then stripped from synced configs before every push and re-injected after every pull. Each machine keeps its own shell path without conflicts.
 
