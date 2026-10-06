@@ -63,13 +63,10 @@ const BASE_FILES = [
   "config.yml",
   "config.yaml",
   "models.yml",
-  "models.db",
   "memory_summary.md",
 ];
-
-if (SYNC_AUTH_DB) {
-  BASE_FILES.push("agent.db");
-}
+/** File extensions that are unsafe to copy (SQLite WAL companions). */
+const UNSAFE_EXTENSIONS = [".db", ".db-wal", ".db-shm"];
 
 // ---------------------------------------------------------------------------
 // 4. File collection
@@ -84,7 +81,11 @@ function getRelativeFiles(dir: string, baseDir = dir): string[] {
       results = results.concat(getRelativeFiles(full, baseDir));
     } else {
       const rel = path.relative(baseDir, full);
-      if (!rel.includes("omp-sync.ts") && !rel.endsWith(".env")) {
+      if (
+        !rel.includes("omp-sync.ts") &&
+        !rel.endsWith(".env") &&
+        !UNSAFE_EXTENSIONS.some((ext) => rel.endsWith(ext))
+      ) {
         results.push(rel);
       }
     }
@@ -192,7 +193,10 @@ async function pullSync(
     await res.json();
 
   const files = data.files.filter(
-    (f) => !f.path.includes("omp-sync.ts") && f.path !== ".env",
+    (f) =>
+      !f.path.includes("omp-sync.ts") &&
+      f.path !== ".env" &&
+      !UNSAFE_EXTENSIONS.some((ext) => f.path.endsWith(ext)),
   );
   const total = files.length;
   const progress = log ? makeProgress("pull", total, log) : undefined;
