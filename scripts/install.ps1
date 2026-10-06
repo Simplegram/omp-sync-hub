@@ -23,7 +23,7 @@ if (-not $GitUrl) {
 $AgentDir = Join-Path $env:USERPROFILE ".omp\agent"
 $ExtDir   = Join-Path $AgentDir "extensions"
 $EnvFile  = Join-Path $AgentDir ".env"
-$ExtFile  = Join-Path $ExtDir "omp-sync\omp-sync.ts"
+$ExtFile  = Join-Path $ExtDir "omp-sync\index.ts"
 
 New-Item -ItemType Directory -Force -Path (Join-Path $ExtDir "omp-sync") | Out-Null
 # Migrate from old flat location if it exists
@@ -43,7 +43,7 @@ $ScriptRoot = $PSScriptRoot  # empty when piped via irm | iex
 
 function Install-Extension([string]$Target) {
     if ($ScriptRoot) {
-        $RepoExtFile = Join-Path $ScriptRoot "..\extension\omp-sync.ts"
+        $RepoExtFile = Join-Path $ScriptRoot "..\extension\index.ts"
         if (Test-Path $RepoExtFile) {
             Copy-Item -Path $RepoExtFile -Destination $Target -Force
             Write-Host "  [OK] Copied extension from local repo to $Target" -ForegroundColor Green
@@ -51,14 +51,14 @@ function Install-Extension([string]$Target) {
         }
         Write-Warning "Local extension not found. Falling back to download."
     }
-    $RawUrl = "https://raw.githubusercontent.com/Simplegram/omp-sync-hub/main/extension/omp-sync.ts"
+    $RawUrl = "https://raw.githubusercontent.com/Simplegram/omp-sync-hub/main/extension/index.ts"
     Write-Host "  Downloading extension from $RawUrl ..." -ForegroundColor Cyan
     try {
         Invoke-WebRequest -Uri $RawUrl -OutFile $Target -UseBasicParsing
         Write-Host "  [OK] Downloaded extension to $Target" -ForegroundColor Green
     } catch {
         Write-Error "Failed to download extension from $RawUrl : $_"
-        Write-Error "Manually copy extension/omp-sync.ts to $Target"
+        Write-Error "Manually copy extension/index.ts to $Target"
         exit 1
     }
 }

@@ -14,7 +14,7 @@ fi
 AGENT_DIR="${HOME}/.omp/agent"
 EXT_DIR="${AGENT_DIR}/extensions"
 ENV_FILE="${AGENT_DIR}/.env"
-EXT_FILE="${EXT_DIR}/omp-sync/omp-sync.ts"
+EXT_FILE="${EXT_DIR}/omp-sync/index.ts"
 
 mkdir -p "${EXT_DIR}/omp-sync"
 # Migrate from old flat location if it exists
@@ -29,12 +29,12 @@ echo "  [OK] Wrote $ENV_FILE"
 
 # Install extension: local repo first, then download
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_EXT="${SCRIPT_DIR}/../extension/omp-sync.ts"
+REPO_EXT="${SCRIPT_DIR}/../extension/index.ts"
 if [[ -f "$REPO_EXT" ]]; then
     cp "$REPO_EXT" "$EXT_FILE"
     echo "  [OK] Copied extension from local repo to $EXT_FILE"
 else
-    RAW_URL="https://raw.githubusercontent.com/Simplegram/omp-sync-hub/main/extension/omp-sync.ts"
+    RAW_URL="https://raw.githubusercontent.com/Simplegram/omp-sync-hub/main/extension/index.ts"
     echo "  Downloading extension from $RAW_URL ..."
     curl -sL "$RAW_URL" -o "$EXT_FILE"
     echo "  [OK] Downloaded extension to $EXT_FILE"
