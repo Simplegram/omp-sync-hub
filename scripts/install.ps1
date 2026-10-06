@@ -27,7 +27,7 @@ param(
     [string]$ServerUrl,
     [string]$Secret,
     [string]$SyncAuthDb = "true",
-    [string]$RepoRawBase = "https://raw.githubusercontent.com/OWNER/omp-sync-hub/main"
+    [string]$RepoRawBase = "https://raw.githubusercontent.com/Simplegram/omp-sync-hub/main"
 )
 
 # ---------------------------------------------------------------------------
@@ -79,10 +79,16 @@ Write-Host "  [OK] Wrote $EnvFile" -ForegroundColor Green
 # 5. Install omp-sync.ts
 # ---------------------------------------------------------------------------
 # Strategy A: running from a cloned repo (script lives in scripts/ subdirectory)
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoExtFile = Join-Path $ScriptDir "..\extension\omp-sync.ts"
+# When piped via irm | iex, MyCommand.Path is null – skip local-repo strategy
+$ScriptPath = $MyInvocation.MyCommand.Path
+if ($ScriptPath) {
+    $ScriptDir = Split-Path -Parent $ScriptPath
+    $RepoExtFile = Join-Path $ScriptDir "..\extension\omp-sync.ts"
+} else {
+    $RepoExtFile = $null
+}
 
-if (Test-Path $RepoExtFile) {
+if ($RepoExtFile -and (Test-Path $RepoExtFile)) {
     # Running from a cloned repository
     Copy-Item -Path $RepoExtFile -Destination $ExtFile -Force
     Write-Host "  [OK] Copied extension from local repo to $ExtFile" -ForegroundColor Green
