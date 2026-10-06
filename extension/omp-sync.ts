@@ -180,6 +180,7 @@ interface CommandContext {
 
 interface OmpApi {
   on?: (event: string, handler: (...args: unknown[]) => void | Promise<void>) => void;
+  registerCommand?: (name: string, handler: (args: string, ctx: CommandContext) => Promise<void>) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,39 +225,43 @@ export default function (omp: OmpApi) {
     });
   }
 
-  return {
-    /** /sync [push|pull|test] command handler */
-    async handler(args: string, ctx: CommandContext): Promise<void> {
-      if (!SERVER_URL || !SYNC_SECRET) {
-        ctx?.ui?.notify?.("[Sync Hub] Not configured. Create .env in your agent directory.");
-        return;
+  const syncHandler = async (args: string, ctx: CommandContext): Promise<void> => {
+    if (!SERVER_URL || !SYNC_SECRET) {
+      ctx?.ui?.notify?.("[Sync Hub] Not configured. Create .env in your agent directory.");
+      return;
+    }
+    ctx?.ui?.setWorkingMessage?.("Syncing with hub...");
+    try {
+      const cmd = args.trim().toLowerCase();
+      if (cmd === "push") {
+        const c = await pushSync();
+        ctx?.ui?.notify?.(`[Sync Hub] Pushed ${c} items to server.`);
+      } else if (cmd === "pull") {
+        const c = await pullSync();
+        ctx?.ui?.notify?.(`[Sync Hub] Pulled ${c} items from server.`);
+      } else if (cmd === "test") {
+        const result = await testConnection();
+        ctx?.ui?.notify?.(`[Sync Hub] ${result}`);
+      } else {
+        ctx?.ui?.notify?.("[Sync Hub] Usage: /sync [push|pull|test]");
       }
-      ctx?.ui?.setWorkingMessage?.("Syncing with hub...");
-      try {
-        const cmd = args.trim().toLowerCase();
-        if (cmd === "push") {
-          const c = await pushSync();
-          ctx?.ui?.notify?.(`[Sync Hub] Pushed ${c} items to server.`);
-        } else if (cmd === "pull") {
-          const c = await pullSync();
-          ctx?.ui?.notify?.(`[Sync Hub] Pulled ${c} items from server.`);
-        } else if (cmd === "test") {
-          const result = await testConnection();
-          ctx?.ui?.notify?.(`[Sync Hub] ${result}`);
-        } else {
-          ctx?.ui?.notify?.("[Sync Hub] Usage: /sync [push|pull|test]");
-        }
-      } catch (err: unknown) {
-        ctx?.ui?.notify?.(`[Sync Hub Error] ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
+    } catch (err: unknown) {
+      ctx?.ui?.notify?.(`[Sync Hub Error] ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
 
-    /** Tab-completion suggestions for /sync arguments */
-    complete(prefix: string): string[] {
-      const options = ["push", "pull", "test"];
-      const trimmed = prefix.trim().toLowerCase();
-      if (!trimmed) return options;
-      return options.filter((o) => o.startsWith(trimmed));
-    },
+  const syncComplete = (prefix: string): string[] => {
+    const options = ["push", "pull", "test"];
+    const trimmed = prefix.trim().toLowerCase();
+    if (!trimmed) return options;
+    return options.filter((o) => o.startsWith(trimmed));
+  };
+
+  // Register /sync command with the TUI
+  omp.registerCommand?.("sync", syncHandler);
+
+  return {
+    handler: syncHandler,
+    complete: syncComplete,
   };
 }
