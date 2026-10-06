@@ -12,6 +12,7 @@ const execAsync = promisify(exec);
 const AGENT_DIR =
   process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".omp", "agent");
 const ENV_PATH = path.join(AGENT_DIR, ".env");
+const ENV_SYNCED_PATH = path.join(AGENT_DIR, ".env.synced");
 
 function loadDotEnv(fp: string): Record<string, string> {
   if (!fs.existsSync(fp)) return {};
@@ -23,7 +24,8 @@ function loadDotEnv(fp: string): Record<string, string> {
   return out;
 }
 
-const cfg = loadDotEnv(ENV_PATH);
+// Load .env.synced first (shared), then .env (local, overrides)
+const cfg = { ...loadDotEnv(ENV_SYNCED_PATH), ...loadDotEnv(ENV_PATH) };
 const GIT_URL = (cfg.OMP_GIT_URL || process.env.OMP_GIT_URL || "").trim();
 
 // ---------------------------------------------------------------------------

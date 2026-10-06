@@ -82,12 +82,24 @@ On first launch the extension:
 
 On each new machine, run the installer with the same `OMP_GIT_URL`. The extension will `git pull` on first launch and pick up all configs, skills, and extensions.
 
-## Client `.env` Reference
+## Client Environment Files
 
-| Variable | Description |
-|----------|-------------|
-| `OMP_GIT_URL` | Git remote URL (e.g. `git@github.com:user/repo.git` or `https://github.com/user/repo.git`) |
-| `OMP_SHELL_PATH` | Optional. Shell path to preserve if you want it in `.env` instead of `config.yml` |
+Two files work together:
+
+| File | Synced? | Purpose |
+|------|---------|---------|
+| `.env` | No (gitignored) | Machine-specific: `OMP_GIT_URL`, `OMP_SHELL_PATH`, secrets |
+| `.env.synced` | Yes (via git) | Shared values for all machines: API keys, service endpoints |
+
+`.env` overrides `.env.synced` when the same variable is set in both.
+
+| Variable | File | Description |
+|----------|------|-------------|
+| `OMP_GIT_URL` | `.env` | Git remote URL |
+| `OMP_SHELL_PATH` | `.env` | Optional. Machine-specific shell path |
+| `SEARXNG_ENDPOINT` | `.env.synced` | Shared service endpoint |
+| `BRAVE_API_KEY` | `.env.synced` | Shared API key |
+| `NTFY_SERVER` / `NTFY_TOPIC` | `.env.synced` | Notification service |
 
 ## Manual Setup
 
@@ -98,9 +110,12 @@ If you prefer not to use the installer:
    OMP_GIT_URL=git@github.com:your-user/your-repo.git
    ```
 
-2. Copy `extension/omp-sync.ts` to `~/.omp/agent/extensions/omp-sync.ts`.
+2. (Optional) Create `~/.omp/agent/.env.synced` with shared values (API keys, service endpoints) that should be available on all machines.
 
-3. Launch omp. The extension handles the rest.
+3. Copy `extension/omp-sync.ts` to `~/.omp/agent/extensions/omp-sync.ts`.
+
+4. Launch omp. The extension handles the rest.
+
 
 ## Repository Structure
 
