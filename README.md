@@ -18,16 +18,20 @@ A zero-dependency TypeScript extension (`omp-sync.ts`) is loaded by omp on every
 
 ### What Gets Synced
 
-Everything in `~/.omp/agent/` **except** what's in `.gitignore`:
+Only the paths below are tracked. Everything else in `~/.omp/agent/` is ignored:
 
-| Synced | Excluded |
-|--------|----------|
-| `config.yml`, `config.yaml`, `models.yml` | `.env` (machine-specific secrets) |
-| `memory_summary.md` | `agent.db` + WAL/SHM files |
-| `skills/` (recursive) | `sessions/`, `memories/` |
-| `extensions/` (recursive) | `extensions/omp-sync.ts` (the extension itself) |
-| | `.cache/`, `tmp/`, `*.log` |
-| | `.DS_Store`, `Thumbs.db` |
+| Synced |
+|--------|
+| `config.yml`, `config.yaml`, `models.yml` |
+| `mcp.json` |
+| `skills/` (recursive) |
+| `extensions/` (recursive) |
+| `RULES.md` |
+| `APPEND_SYSTEM.md` |
+| `.env.synced` (shared env vars) |
+| `.gitignore` |
+
+**Not synced:** `.env` (local secrets), `agent.db` + WAL/SHM, `sessions/`, `memories/`, `.cache/`, `tmp/`, `*.log`, OS junk.
 
 `shellPath` in `config.yml` is automatically migrated to `.env` as `OMP_SHELL_PATH` on first bootstrap, then stripped from synced configs before every push and re-injected after every pull. Each machine keeps its own shell path without conflicts.
 

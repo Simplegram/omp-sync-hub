@@ -105,36 +105,41 @@ function migrateShellPath(): void {
 // ---------------------------------------------------------------------------
 // 4. Bootstrap: .gitignore, git init, remote, author, shellPath migration
 // ---------------------------------------------------------------------------
-const GITIGNORE = [
-  // Secrets & machine-specific
-  ".env",
-  // SQLite databases (all)
-  "*.db",
-  "*.db-wal",
-  "*.db-shm",
-  // Large / machine-local directories
-  "sessions/",
-  "memories/",
-  // The extension itself
-  "extensions/omp-sync.ts",
-  // Cache & temp
-  ".cache/",
-  "tmp/",
-  "*.log",
-  // OS junk
-  ".DS_Store",
-  "Thumbs.db",
-  "",
-].join("\n");
-
-/** Patterns to untrack from git index if previously committed. */
-const UNTRACK_PATTERNS = [
-  ".env",
-  "sessions/",
-  "memories/",
-  ".cache/",
-  "tmp/",
+/** Paths (and subtrees) that are synced. Everything else is ignored. */
+const SYNC_WHITELIST = [
+  ".gitignore",
+  ".env.synced",
+  "extensions/",
+  "skills/",
+  "RULES.md",
+  "APPEND_SYSTEM.md",
+  "config.yml",
+  "mcp.json",
+  "models.yml",
+  "config.yaml",
 ];
+
+/** Build .gitignore: ignore all, then un-ignore whitelist entries. */
+function buildGitIgnore(): string {
+  const lines = ["*"];
+  for (const p of SYNC_WHITELIST) {
+    lines.push(`!${p}`);
+    if (p.endsWith("/")) lines.push(`!${p}**`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+/** True if a git-tracked path should stay tracked (matches the whitelist). */
+function isWhitelisted(filePath: string): boolean {
+  for (const p of SYNC_WHITELIST) {
+    if (p.endsWith("/")) {
+      if (filePath.startsWith(p)) return true;
+    } else if (filePath === p) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function bootstrap(): void {
   // Verify git in PATH
@@ -146,7 +151,10 @@ function bootstrap(): void {
 
   // Write .gitignore if missing
   const gi = path.join(AGENT_DIR, ".gitignore");
-  if (!fs.existsSync(gi)) fs.writeFileSync(gi, GITIGNORE);
+  const newIgnore = buildGitIgnore();
+  if (!fs.existsSync(gi) || fs.readFileSync(gi, "utf-8") !== newIgnore) {
+    fs.writeFileSync(gi, newIgnore);
+  }
 
   // Migrate shellPath from config to .env (one-time)
   migrateShellPath();
@@ -162,16 +170,13 @@ function bootstrap(): void {
   gitSync('config user.name "omp-sync"');
   gitSync('config user.email "omp-sync@local"');
 
-  // Untrack files that are now gitignored but were previously committed
+  // Untrack anything not in the whitelist (prevents old junk from staying tracked)
   const tracked = gitSync("ls-files");
-  const trackedList = tracked.split("\n").filter(Boolean);
-  for (const pattern of UNTRACK_PATTERNS) {
-    const toRemove = trackedList.filter((f) =>
-      pattern.endsWith("/") ? f.startsWith(pattern) : f === pattern,
-    );
-    if (toRemove.length > 0) {
-      gitSync(`rm --cached -- ${toRemove.map((f) => `"${f}"`).join(" ")}`);
-    }
+  const toRemove = tracked
+    .split("\n")
+    .filter((f) => f && !isWhitelisted(f));
+  if (toRemove.length > 0) {
+    gitSync(`rm --cached -- ${toRemove.map((f) => `"${f}"`).join(" ")}`);
   }
   // Ensure remote
   if (!GIT_URL) return;
