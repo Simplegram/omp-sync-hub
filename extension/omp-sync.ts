@@ -3,12 +3,16 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as crypto from "node:crypto";
 
+// ---------------------------------------------------------------------------
 // 1. Resolve agent directory
+// ---------------------------------------------------------------------------
 const AGENT_DIR =
   process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".omp", "agent");
 const ENV_PATH = path.join(AGENT_DIR, ".env");
 
+// ---------------------------------------------------------------------------
 // 2. Zero-dependency .env parser
+// ---------------------------------------------------------------------------
 function loadDotEnv(filePath: string): Record<string, string> {
   const result: Record<string, string> = {};
   if (!fs.existsSync(filePath)) return result;
@@ -58,6 +62,9 @@ if (SYNC_AUTH_DB) {
   BASE_FILES.push("agent.db");
 }
 
+// ---------------------------------------------------------------------------
+// 3. File collection
+// ---------------------------------------------------------------------------
 function getRelativeFiles(dir: string, baseDir = dir): string[] {
   let results: string[] = [];
   if (!fs.existsSync(dir)) return results;
@@ -68,7 +75,6 @@ function getRelativeFiles(dir: string, baseDir = dir): string[] {
       results = results.concat(getRelativeFiles(full, baseDir));
     } else {
       const rel = path.relative(baseDir, full);
-      // Skip the sync extension itself and local .env file
       if (!rel.includes("omp-sync.ts") && !rel.endsWith(".env")) {
         results.push(rel);
       }
@@ -77,12 +83,14 @@ function getRelativeFiles(dir: string, baseDir = dir): string[] {
   return results;
 }
 
+// ---------------------------------------------------------------------------
+// 4. Sync operations
+// ---------------------------------------------------------------------------
 async function pushSync(): Promise<number> {
   if (!SERVER_URL || !SYNC_SECRET) return 0;
 
   const fileEntries: Array<{ path: string; content: string; mtime: number }> = [];
 
-  // Collect individual files
   for (const file of BASE_FILES) {
     const filePath = path.join(AGENT_DIR, file);
     if (fs.existsSync(filePath)) {
@@ -92,7 +100,6 @@ async function pushSync(): Promise<number> {
     }
   }
 
-  // Collect directories recursively
   for (const folder of TARGET_DIRECTORIES) {
     const folderPath = path.join(AGENT_DIR, folder);
     if (fs.existsSync(folderPath)) {
@@ -138,7 +145,6 @@ async function pullSync(): Promise<number> {
 
   let count = 0;
   for (const item of data.files) {
-    // Never overwrite the sync extension or the device's local .env file
     if (item.path.includes("omp-sync.ts") || item.path === ".env") continue;
 
     const dest = path.join(AGENT_DIR, item.path);
@@ -152,7 +158,8 @@ async function pullSync(): Promise<number> {
 }
 
 async function testConnection(): Promise<string> {
-  if (!SERVER_URL || !SYNC_SECRET) return "Not configured (missing OMP_SYNC_URL or OMP_SYNC_SECRET)";
+  if (!SERVER_URL || !SYNC_SECRET)
+    return "Not configured (missing OMP_SYNC_URL or OMP_SYNC_SECRET)";
 
   const controller = AbortSignal.timeout(5000);
   const res = await fetch(`${SERVER_URL}/api/health`, {
@@ -167,104 +174,95 @@ async function testConnection(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Type definitions
+// 5. Minimal ExtensionAPI interface (zero-dependency single-file extension)
 // ---------------------------------------------------------------------------
-interface OmpUi {
+interface SyncUi {
+  notify?: (msg: string, level?: string) => void;
   setWorkingMessage?: (msg: string) => void;
-  notify?: (msg: string) => void;
 }
 
-interface CommandContext {
-  ui?: OmpUi;
+interface SyncCommandContext {
+  ui?: SyncUi;
 }
 
-interface OmpApi {
-  on?: (event: string, handler: (...args: unknown[]) => void | Promise<void>) => void;
-  registerCommand?: (name: string, handler: (args: string, ctx: CommandContext) => Promise<void>) => void;
+type TimerHandle = ReturnType<typeof setTimeout>;
+
+interface ExtensionLike {
+  on: (event: string, handler: (...args: unknown[]) => void | Promise<void>) => void;
+  registerCommand: (
+    name: string,
+    def: {
+      description?: string;
+      handler: (args: string, ctx: SyncCommandContext) => void | Promise<void>;
+    },
+  ) => void;
 }
 
 // ---------------------------------------------------------------------------
-// Shared state (module-level so both activate and handler see the same timer)
+// 6. Debounce state (module-level; cleared on session_shutdown)
 // ---------------------------------------------------------------------------
-let debounceTimer: NodeJS.Timeout | undefined = undefined;
+let debounceTimer: TimerHandle | undefined;
 
-const triggerDebouncedPush = () => {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(async () => {
+// ---------------------------------------------------------------------------
+// 7. Extension entry point
+// ---------------------------------------------------------------------------
+export default function (pi: ExtensionLike): void {
+  pi.on("session_start", async () => {
+    if (!SERVER_URL || !SYNC_SECRET) return;
+    try {
+      await pullSync();
+    } catch {
+      // server may not have initial bundle yet
+    }
+  });
+
+  pi.on("turn_end", () => {
+    if (!SERVER_URL || !SYNC_SECRET) return;
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(async () => {
+      try {
+        await pushSync();
+      } catch {
+        // silent on background auto-sync
+      }
+    }, 2500);
+  });
+
+  pi.on("session_shutdown", async () => {
+    clearTimeout(debounceTimer);
+    if (!SERVER_URL || !SYNC_SECRET) return;
     try {
       await pushSync();
     } catch {
-      // silent on background auto-sync
+      // exit gracefully
     }
-  }, 2500);
-};
+  });
 
-// ---------------------------------------------------------------------------
-// Command handler and autocomplete (module-level, attached to factory)
-// ---------------------------------------------------------------------------
-const syncHandler = async (args: string, ctx: CommandContext): Promise<void> => {
-  if (!SERVER_URL || !SYNC_SECRET) {
-    ctx?.ui?.notify?.("[Sync Hub] Not configured. Create .env in your agent directory.");
-    return;
-  }
-  ctx?.ui?.setWorkingMessage?.("Syncing with hub...");
-  try {
-    const cmd = args.trim().toLowerCase();
-    if (cmd === "push") {
-      const c = await pushSync();
-      ctx?.ui?.notify?.(`[Sync Hub] Pushed ${c} items to server.`);
-    } else if (cmd === "pull") {
-      const c = await pullSync();
-      ctx?.ui?.notify?.(`[Sync Hub] Pulled ${c} items from server.`);
-    } else if (cmd === "test") {
-      const result = await testConnection();
-      ctx?.ui?.notify?.(`[Sync Hub] ${result}`);
-    } else {
-      ctx?.ui?.notify?.("[Sync Hub] Usage: /sync [push|pull|test]");
-    }
-  } catch (err: unknown) {
-    ctx?.ui?.notify?.(`[Sync Hub Error] ${err instanceof Error ? err.message : String(err)}`);
-  }
-};
-
-const syncComplete = (prefix: string): string[] => {
-  const options = ["push", "pull", "test"];
-  const trimmed = prefix.trim().toLowerCase();
-  if (!trimmed) return options;
-  return options.filter((o) => o.startsWith(trimmed));
-};
-
-// ---------------------------------------------------------------------------
-// Factory function – loader calls this, then accesses .handler / .complete
-// on the function itself
-// ---------------------------------------------------------------------------
-const syncFactory = Object.assign(
-  (omp: OmpApi): void => {
-    if (SERVER_URL && SYNC_SECRET) {
-      omp.on?.("session_start", async () => {
-        try {
-          await pullSync();
-        } catch {
-          // server may not have initial bundle yet
+  pi.registerCommand("sync", {
+    description: "Sync with hub: /sync [push|pull|test]",
+    handler: async (args: string, ctx: SyncCommandContext) => {
+      if (!SERVER_URL || !SYNC_SECRET) {
+        ctx.ui?.notify?.("[Sync Hub] Not configured. Create .env in your agent directory.");
+        return;
+      }
+      ctx.ui?.setWorkingMessage?.("Syncing with hub...");
+      try {
+        const cmd = args.trim().toLowerCase();
+        if (cmd === "push") {
+          const c = await pushSync();
+          ctx.ui?.notify?.(`[Sync Hub] Pushed ${c} items to server.`);
+        } else if (cmd === "pull") {
+          const c = await pullSync();
+          ctx.ui?.notify?.(`[Sync Hub] Pulled ${c} items from server.`);
+        } else if (cmd === "test") {
+          const result = await testConnection();
+          ctx.ui?.notify?.(`[Sync Hub] ${result}`);
+        } else {
+          ctx.ui?.notify?.("[Sync Hub] Usage: /sync [push|pull|test]");
         }
-      });
-
-      omp.on?.("turn_end", () => {
-        triggerDebouncedPush();
-      });
-
-      omp.on?.("session_shutdown", async () => {
-        try {
-          await pushSync();
-        } catch {
-          // exit gracefully
-        }
-      });
-    }
-
-    omp.registerCommand?.("sync", syncHandler);
-  },
-  { handler: syncHandler, complete: syncComplete },
-);
-
-export default syncFactory;
+      } catch (err: unknown) {
+        ctx.ui?.notify?.(`[Sync Hub Error] ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  });
+}
