@@ -46,10 +46,10 @@ def init_db():
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS sync_history (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            device_id  TEXT,
-            action     TEXT,
-            timestamp  TIMESTAMP,
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id   TEXT,
+            action      TEXT,
+            timestamp   TIMESTAMP,
             files_count INTEGER
         )
         """
@@ -98,14 +98,6 @@ class PushPayload(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def user_storage_dir(username: str) -> str:
-    """Per-username storage root on the server."""
-    safe = username.replace("\\", "_").replace("/", "_")
-    d = os.path.join(STORAGE_DIR, safe)
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
 def file_group(rel_path: str) -> str:
     """Top-level path component, or 'config' for root-level files."""
     parts = rel_path.replace("\\", "/").split("/")
@@ -115,7 +107,7 @@ def file_group(rel_path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# API – Push
+# API - Push
 # ---------------------------------------------------------------------------
 @app.post("/api/sync/push")
 def push_files(payload: PushPayload, token: None = Depends(verify_token)):
@@ -137,10 +129,9 @@ def push_files(payload: PushPayload, token: None = Depends(verify_token)):
         (payload.device_id, payload.hostname, payload.os_info, payload.username, now),
     )
 
-    storage_root = user_storage_dir(payload.username)
     for item in payload.files:
         rel_path = item.path.replace("\\", "/").strip("/")
-        dest_path = os.path.join(storage_root, rel_path)
+        dest_path = os.path.join(STORAGE_DIR, rel_path)
         dest_dir = os.path.dirname(dest_path)
         if dest_dir:
             os.makedirs(dest_dir, exist_ok=True)
@@ -158,26 +149,24 @@ def push_files(payload: PushPayload, token: None = Depends(verify_token)):
 
 
 # ---------------------------------------------------------------------------
-# API – Pull
+# API - Pull
 # ---------------------------------------------------------------------------
 @app.get("/api/sync/pull")
 def pull_files(
     device_id: str,
-    username: str,
     hostname: str = "unknown",
     groups: Optional[str] = None,
     token: None = Depends(verify_token),
 ):
-    storage_root = user_storage_dir(username)
     allowed_groups: Optional[set] = None
     if groups:
         allowed_groups = {g.strip() for g in groups.split(",") if g.strip()}
 
     files_to_send = []
-    for root, _, files in os.walk(storage_root):
+    for root, _, files in os.walk(STORAGE_DIR):
         for fname in files:
             full_path = os.path.join(root, fname)
-            rel_path = os.path.relpath(full_path, storage_root).replace("\\", "/")
+            rel_path = os.path.relpath(full_path, STORAGE_DIR).replace("\\", "/")
 
             if allowed_groups is not None:
                 if file_group(rel_path) not in allowed_groups:
@@ -205,31 +194,27 @@ def pull_files(
 
 
 # ---------------------------------------------------------------------------
-# API – Available groups
+# API - Available groups
 # ---------------------------------------------------------------------------
 @app.get("/api/sync/available")
-def available_groups(
-    username: str,
-    token: None = Depends(verify_token),
-):
-    """List file groups and file counts available for the given username."""
-    storage_root = user_storage_dir(username)
+def available_groups(token: None = Depends(verify_token)):
+    """List file groups and file counts available on the server."""
     group_counts: dict = {}
-    for root, _, files in os.walk(storage_root):
+    for root, _, files in os.walk(STORAGE_DIR):
         for fname in files:
             full_path = os.path.join(root, fname)
-            rel_path = os.path.relpath(full_path, storage_root).replace("\\", "/")
+            rel_path = os.path.relpath(full_path, STORAGE_DIR).replace("\\", "/")
             g = file_group(rel_path)
             group_counts[g] = group_counts.get(g, 0) + 1
 
     groups = [
         {"name": g, "files": c} for g, c in sorted(group_counts.items())
     ]
-    return {"username": username, "groups": groups}
+    return {"groups": groups}
 
 
 # ---------------------------------------------------------------------------
-# API – Health
+# API - Health
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 def health_check(token: None = Depends(verify_token)):

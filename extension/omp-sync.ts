@@ -92,9 +92,26 @@ function getRelativeFiles(dir: string, baseDir = dir): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Sync operations
+// 5. Progress logger
 // ---------------------------------------------------------------------------
-async function pushSync(): Promise<number> {
+type ProgressFn = (msg: string) => void;
+
+function makeProgress(
+  label: string,
+  total: number,
+  log: ProgressFn,
+): (filePath: string, idx: number) => void {
+  return (filePath: string, idx: number) => {
+    log(`[Sync] ${label}: ${idx}/${total} ${filePath}`);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 6. Sync operations
+// ---------------------------------------------------------------------------
+async function pushSync(
+  log?: ProgressFn,
+): Promise<number> {
   if (!SERVER_URL || !SYNC_SECRET) return 0;
 
   const fileEntries: Array<{ path: string; content: string; mtime: number }> = [];
@@ -121,6 +138,13 @@ async function pushSync(): Promise<number> {
     }
   }
 
+  const total = fileEntries.length;
+  const progress = log ? makeProgress("push", total, log) : undefined;
+
+  for (let i = 0; i < total; i++) {
+    progress?.(fileEntries[i].path, i + 1);
+  }
+
   const res = await fetch(`${SERVER_URL}/api/sync/push`, {
     method: "POST",
     headers: {
@@ -137,14 +161,17 @@ async function pushSync(): Promise<number> {
   });
 
   if (!res.ok) throw new Error(`Push failed HTTP ${res.status}`);
-  return fileEntries.length;
+  return total;
 }
 
 /**
  * Pull files from the server.
  * @param groups – optional list of groups to pull. Defaults to SAFE_GROUPS.
  */
-async function pullSync(groups?: string[]): Promise<number> {
+async function pullSync(
+  groups?: string[],
+  log?: ProgressFn,
+): Promise<number> {
   if (!SERVER_URL || !SYNC_SECRET) return 0;
 
   const groupList = groups && groups.length > 0 ? groups : SAFE_GROUPS;
@@ -152,7 +179,6 @@ async function pullSync(groups?: string[]): Promise<number> {
   const url =
     `${SERVER_URL}/api/sync/pull` +
     `?device_id=${encodeURIComponent(DEVICE_ID)}` +
-    `&username=${encodeURIComponent(USERNAME)}` +
     `&hostname=${encodeURIComponent(HOSTNAME)}` +
     `&groups=${encodeURIComponent(groupList.join(","))}`;
 
@@ -164,16 +190,21 @@ async function pullSync(groups?: string[]): Promise<number> {
   const data: { files: Array<{ path: string; content: string; mtime: number }> } =
     await res.json();
 
-  let count = 0;
-  for (const item of data.files) {
-    if (item.path.includes("omp-sync.ts") || item.path === ".env") continue;
+  const files = data.files.filter(
+    (f) => !f.path.includes("omp-sync.ts") && f.path !== ".env",
+  );
+  const total = files.length;
+  const progress = log ? makeProgress("pull", total, log) : undefined;
 
+  let count = 0;
+  for (let i = 0; i < total; i++) {
+    const item = files[i];
     const dest = path.join(AGENT_DIR, item.path);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-
     const buffer = Buffer.from(item.content, "base64");
     fs.writeFileSync(dest, buffer);
     count++;
+    progress?.(item.path, i + 1);
   }
   return count;
 }
@@ -184,9 +215,7 @@ async function fetchAvailableGroups(): Promise<
 > {
   if (!SERVER_URL || !SYNC_SECRET) return [];
 
-  const url =
-    `${SERVER_URL}/api/sync/available` +
-    `?username=${encodeURIComponent(USERNAME)}`;
+  const url = `${SERVER_URL}/api/sync/available`;
 
   const res = await fetch(url, {
     headers: { "x-sync-token": SYNC_SECRET },
@@ -215,7 +244,7 @@ async function testConnection(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Minimal ExtensionAPI interface (zero-dependency single-file extension)
+// 7. Minimal ExtensionAPI interface (zero-dependency single-file extension)
 // ---------------------------------------------------------------------------
 interface SyncUi {
   notify?: (msg: string, level?: string) => void;
@@ -225,7 +254,14 @@ interface SyncUi {
 interface SyncCommandContext {
   ui?: SyncUi;
 }
+
 type TimerHandle = NodeJS.Timeout;
+
+interface SyncCompletion {
+  label: string;
+  value: string;
+  description?: string;
+}
 
 interface ExtensionLike {
   on: (event: string, handler: (...args: unknown[]) => void | Promise<void>) => void;
@@ -234,17 +270,56 @@ interface ExtensionLike {
     def: {
       description?: string;
       handler: (args: string, ctx: SyncCommandContext) => void | Promise<void>;
+      getArgumentCompletions?: (arg: string) => SyncCompletion[] | null;
     },
   ) => void;
 }
 
 // ---------------------------------------------------------------------------
-// 7. Debounce state (module-level; cleared on session_shutdown)
+// 8. Tab-completion candidates
+// ---------------------------------------------------------------------------
+const SUB_COMMANDS: SyncCompletion[] = [
+  { label: "push", value: "push", description: "Push all files to server" },
+  { label: "pull", value: "pull", description: "Pull safe groups (config, skills, extensions)" },
+  { label: "pull all", value: "pull all", description: "Pull everything including sessions, memories" },
+  { label: "select", value: "select", description: "List available groups on server" },
+  { label: "test", value: "test", description: "Test server connection" },
+];
+
+function getSyncCompletions(arg: string): SyncCompletion[] | null {
+  const text = (arg || "").trim().toLowerCase();
+
+  // Second-level: /sync pull <group>
+  const pullMatch = text.match(/^pull[ \t]+(\S*)$/);
+  if (pullMatch) {
+    const prefix = pullMatch[1].toLowerCase();
+    const groupOptions: SyncCompletion[] = [
+      { label: "all", value: "pull all", description: "All groups" },
+      ...ALL_GROUPS.map((g) => ({
+        label: g,
+        value: `pull ${g}`,
+        description: `Pull ${g} group`,
+      })),
+    ];
+    const filtered = groupOptions.filter(
+      (o) => o.label.startsWith(prefix) || o.value.startsWith(`pull ${prefix}`),
+    );
+    return filtered.length ? filtered : null;
+  }
+
+  // First-level: /sync <subcommand>
+  if (text.includes(" ")) return null;
+  const m = SUB_COMMANDS.filter((s) => s.label.startsWith(text));
+  return m.length ? m : null;
+}
+
+// ---------------------------------------------------------------------------
+// 9. Debounce state (module-level; cleared on session_shutdown)
 // ---------------------------------------------------------------------------
 let debounceTimer: TimerHandle | undefined;
 
 // ---------------------------------------------------------------------------
-// 8. Extension entry point
+// 10. Extension entry point
 // ---------------------------------------------------------------------------
 export default function (pi: ExtensionLike): void {
   pi.on("session_start", async () => {
@@ -279,21 +354,26 @@ export default function (pi: ExtensionLike): void {
   });
 
   pi.registerCommand("sync", {
-    description:
-      "Sync with hub: /sync [push|pull|select|test] [groups...]",
+    description: "Sync with hub: /sync [push|pull|select|test] [groups...]",
+    getArgumentCompletions: getSyncCompletions,
     handler: async (args: string, ctx: SyncCommandContext) => {
       if (!SERVER_URL || !SYNC_SECRET) {
         ctx.ui?.notify?.("[Sync Hub] Not configured. Create .env in your agent directory.");
         return;
       }
-      ctx.ui?.setWorkingMessage?.("Syncing with hub...");
-      try {
-        const trimmed = args.trim();
-        const parts = trimmed.split(/\s+/).filter(Boolean);
-        const cmd = (parts[0] || "").toLowerCase();
 
+      const trimmed = args.trim();
+      const parts = trimmed.split(/\s+/).filter(Boolean);
+      const cmd = (parts[0] || "").toLowerCase();
+
+      const log: ProgressFn = (msg: string) => {
+        ctx.ui?.setWorkingMessage?.(msg);
+      };
+
+      try {
         if (cmd === "push") {
-          const c = await pushSync();
+          ctx.ui?.setWorkingMessage?.("[Sync] Pushing...");
+          const c = await pushSync(log);
           ctx.ui?.notify?.(`[Sync Hub] Pushed ${c} items to server.`);
         } else if (cmd === "pull") {
           const groupArg = (parts[1] || "").toLowerCase();
@@ -303,7 +383,8 @@ export default function (pi: ExtensionLike): void {
           } else if (groupArg) {
             groups = groupArg.split(",").map((g) => g.trim()).filter(Boolean);
           }
-          const c = await pullSync(groups);
+          ctx.ui?.setWorkingMessage?.("[Sync] Pulling...");
+          const c = await pullSync(groups, log);
           const label = groups
             ? groups.join(", ")
             : SAFE_GROUPS.join(", ");
@@ -318,7 +399,7 @@ export default function (pi: ExtensionLike): void {
               return `  ${g.name} — ${g.files} files${safe}`;
             });
             ctx.ui?.notify?.(
-              `[Sync Hub] Available groups for ${USERNAME}:\n` +
+              `[Sync Hub] Available groups:\n` +
                 lines.join("\n") +
                 `\n\nPull with: /sync pull <group1,group2,...>` +
                 `\nAll: /sync pull all`
