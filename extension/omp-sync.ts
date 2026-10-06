@@ -200,68 +200,71 @@ const triggerDebouncedPush = () => {
 };
 
 // ---------------------------------------------------------------------------
-// Extension entry point – factory function
+// Command handler and autocomplete (module-level, attached to factory)
 // ---------------------------------------------------------------------------
-export default function (omp: OmpApi) {
-  if (SERVER_URL && SYNC_SECRET) {
-    omp.on?.("session_start", async () => {
-      try {
-        await pullSync();
-      } catch {
-        // server may not have initial bundle yet
-      }
-    });
-
-    omp.on?.("turn_end", () => {
-      triggerDebouncedPush();
-    });
-
-    omp.on?.("session_shutdown", async () => {
-      try {
-        await pushSync();
-      } catch {
-        // exit gracefully
-      }
-    });
+const syncHandler = async (args: string, ctx: CommandContext): Promise<void> => {
+  if (!SERVER_URL || !SYNC_SECRET) {
+    ctx?.ui?.notify?.("[Sync Hub] Not configured. Create .env in your agent directory.");
+    return;
   }
-
-  const syncHandler = async (args: string, ctx: CommandContext): Promise<void> => {
-    if (!SERVER_URL || !SYNC_SECRET) {
-      ctx?.ui?.notify?.("[Sync Hub] Not configured. Create .env in your agent directory.");
-      return;
+  ctx?.ui?.setWorkingMessage?.("Syncing with hub...");
+  try {
+    const cmd = args.trim().toLowerCase();
+    if (cmd === "push") {
+      const c = await pushSync();
+      ctx?.ui?.notify?.(`[Sync Hub] Pushed ${c} items to server.`);
+    } else if (cmd === "pull") {
+      const c = await pullSync();
+      ctx?.ui?.notify?.(`[Sync Hub] Pulled ${c} items from server.`);
+    } else if (cmd === "test") {
+      const result = await testConnection();
+      ctx?.ui?.notify?.(`[Sync Hub] ${result}`);
+    } else {
+      ctx?.ui?.notify?.("[Sync Hub] Usage: /sync [push|pull|test]");
     }
-    ctx?.ui?.setWorkingMessage?.("Syncing with hub...");
-    try {
-      const cmd = args.trim().toLowerCase();
-      if (cmd === "push") {
-        const c = await pushSync();
-        ctx?.ui?.notify?.(`[Sync Hub] Pushed ${c} items to server.`);
-      } else if (cmd === "pull") {
-        const c = await pullSync();
-        ctx?.ui?.notify?.(`[Sync Hub] Pulled ${c} items from server.`);
-      } else if (cmd === "test") {
-        const result = await testConnection();
-        ctx?.ui?.notify?.(`[Sync Hub] ${result}`);
-      } else {
-        ctx?.ui?.notify?.("[Sync Hub] Usage: /sync [push|pull|test]");
-      }
-    } catch (err: unknown) {
-      ctx?.ui?.notify?.(`[Sync Hub Error] ${err instanceof Error ? err.message : String(err)}`);
+  } catch (err: unknown) {
+    ctx?.ui?.notify?.(`[Sync Hub Error] ${err instanceof Error ? err.message : String(err)}`);
+  }
+};
+
+const syncComplete = (prefix: string): string[] => {
+  const options = ["push", "pull", "test"];
+  const trimmed = prefix.trim().toLowerCase();
+  if (!trimmed) return options;
+  return options.filter((o) => o.startsWith(trimmed));
+};
+
+// ---------------------------------------------------------------------------
+// Factory function – loader calls this, then accesses .handler / .complete
+// on the function itself
+// ---------------------------------------------------------------------------
+const syncFactory = Object.assign(
+  (omp: OmpApi): void => {
+    if (SERVER_URL && SYNC_SECRET) {
+      omp.on?.("session_start", async () => {
+        try {
+          await pullSync();
+        } catch {
+          // server may not have initial bundle yet
+        }
+      });
+
+      omp.on?.("turn_end", () => {
+        triggerDebouncedPush();
+      });
+
+      omp.on?.("session_shutdown", async () => {
+        try {
+          await pushSync();
+        } catch {
+          // exit gracefully
+        }
+      });
     }
-  };
 
-  const syncComplete = (prefix: string): string[] => {
-    const options = ["push", "pull", "test"];
-    const trimmed = prefix.trim().toLowerCase();
-    if (!trimmed) return options;
-    return options.filter((o) => o.startsWith(trimmed));
-  };
+    omp.registerCommand?.("sync", syncHandler);
+  },
+  { handler: syncHandler, complete: syncComplete },
+);
 
-  // Register /sync command with the TUI
-  omp.registerCommand?.("sync", syncHandler);
-
-  return {
-    handler: syncHandler,
-    complete: syncComplete,
-  };
-}
+export default syncFactory;
