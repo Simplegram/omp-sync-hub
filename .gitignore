@@ -1,0 +1,7 @@
+data/
+sync-data/
+.env
+client.env
+__pycache__/
+*.pyc
+.DS_Store

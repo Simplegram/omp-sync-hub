@@ -1,0 +1,14 @@
+services:
+  omp-sync:
+    build: .
+    container_name: omp-sync-server
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - DATA_DIR=/data
+      - SYNC_SECRET=${SYNC_SECRET}
+      - DASHBOARD_USER=${DASHBOARD_USER:-admin}
+      - DASHBOARD_PASS=${DASHBOARD_PASS}
+    volumes:
+      - ./data:/data
