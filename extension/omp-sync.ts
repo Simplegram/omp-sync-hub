@@ -53,15 +53,13 @@ const USERNAME = process.env.USERNAME || os.hostname();
 // 3. File groups
 // ---------------------------------------------------------------------------
 /** Groups that are safe to pull by default (no machine-specific paths). */
-const SAFE_GROUPS = ["config", "skills", "extensions"];
+const SAFE_GROUPS = ["skills", "extensions"];
 
 /** All groups that can be explicitly pulled. */
-const ALL_GROUPS = ["config", "skills", "extensions", "sessions", "memories"];
+const ALL_GROUPS = ["skills", "extensions", "sessions", "memories"];
 
 const TARGET_DIRECTORIES = ["skills", "extensions", "sessions", "memories"];
 const BASE_FILES = [
-  "config.yml",
-  "config.yaml",
   "models.yml",
   "memory_summary.md",
 ];
