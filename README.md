@@ -28,7 +28,7 @@ Everything in `~/.omp/agent/` **except** what's in `.gitignore`:
 | `extensions/` (recursive) | `memories/` |
 | | `extensions/omp-sync.ts` (the extension itself) |
 
-`shellPath` in `config.yml` is preserved locally — it's in `.env` as `OMP_SHELL_PATH` if you need it across machines, or just leave it in `config.yml` since it's synced (the value is machine-specific but harmless on other OSes).
+`shellPath` in `config.yml` is automatically migrated to `.env` as `OMP_SHELL_PATH` on first bootstrap, then stripped from synced configs before every push and re-injected after every pull. Each machine keeps its own shell path without conflicts.
 
 ## Setup
 
@@ -40,8 +40,6 @@ gh repo create omp-agent-config --private
 ```
 
 This repo stores your agent config data. It starts empty — the first machine to run omp will push its local files.
-
-### 2. Install the Client
 
 **Windows (one-liner):**
 ```powershell
@@ -73,6 +71,7 @@ The installer:
 On first launch the extension:
 - Verifies `git` is in PATH
 - Writes `.gitignore` to `~/.omp/agent/` (if missing)
+- Migrates `shellPath` from `config.yml` to `.env` as `OMP_SHELL_PATH` (one-time)
 - Runs `git init -b main` (if not already a repo)
 - Sets local `user.name`/`user.email` (no global git config needed)
 - Adds the remote

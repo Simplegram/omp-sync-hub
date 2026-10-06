@@ -43,7 +43,65 @@ async function gitAsync(args: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Bootstrap: .gitignore, git init, remote, author
+// 3. shellPath: keep machine-specific path out of synced configs
+// ---------------------------------------------------------------------------
+const SHELLPATH_FILES = ["config.yml", "config.yaml"];
+
+/** Read shellPath from the first config file that has it. */
+function extractShellPath(): string | null {
+  for (const name of SHELLPATH_FILES) {
+    const p = path.join(AGENT_DIR, name);
+    if (!fs.existsSync(p)) continue;
+    const m = fs.readFileSync(p, "utf8").match(/^shellPath:\s*(\S+)/m);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** Remove shellPath lines from config files so they're never committed. */
+function stripShellPath(): void {
+  for (const name of SHELLPATH_FILES) {
+    const p = path.join(AGENT_DIR, name);
+    if (!fs.existsSync(p)) continue;
+    const content = fs.readFileSync(p, "utf8");
+    if (!/^shellPath:.*$/m.test(content)) continue;
+    fs.writeFileSync(p, content.replace(/^shellPath:.*\r?\n?/m, ""));
+  }
+}
+
+/** Inject OMP_SHELL_PATH from .env into the first existing config file. */
+function injectShellPath(): void {
+  const env = loadDotEnv(ENV_PATH);
+  const shell = env.OMP_SHELL_PATH || process.env.OMP_SHELL_PATH || "";
+  if (!shell) return;
+  for (const name of SHELLPATH_FILES) {
+    const p = path.join(AGENT_DIR, name);
+    if (!fs.existsSync(p)) continue;
+    let content = fs.readFileSync(p, "utf8");
+    if (/^shellPath:/m.test(content)) {
+      content = content.replace(/^shellPath:.*$/m, `shellPath: ${shell}`);
+    } else {
+      content = content.replace(/\s*$/, `\nshellPath: ${shell}\n`);
+    }
+    fs.writeFileSync(p, content);
+    return;
+  }
+}
+
+/** One-time migration: move shellPath from config to .env during bootstrap. */
+function migrateShellPath(): void {
+  const existing = loadDotEnv(ENV_PATH);
+  if (existing.OMP_SHELL_PATH) return;
+  const shell = extractShellPath();
+  if (!shell) return;
+  let envContent = fs.readFileSync(ENV_PATH, "utf8");
+  envContent = envContent.replace(/\s*$/, `\nOMP_SHELL_PATH=${shell}\n`);
+  fs.writeFileSync(ENV_PATH, envContent);
+  stripShellPath();
+}
+
+// ---------------------------------------------------------------------------
+// 4. Bootstrap: .gitignore, git init, remote, author, shellPath migration
 // ---------------------------------------------------------------------------
 const GITIGNORE = [
   ".env",
@@ -67,6 +125,9 @@ function bootstrap(): void {
   // Write .gitignore if missing
   const gi = path.join(AGENT_DIR, ".gitignore");
   if (!fs.existsSync(gi)) fs.writeFileSync(gi, GITIGNORE);
+
+  // Migrate shellPath from config to .env (one-time)
+  migrateShellPath();
 
   // Init repo if needed
   try {
@@ -99,7 +160,7 @@ function remoteHasCommits(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Safe pull (rebase + autostash, abort on conflict)
+// 5. Safe pull (rebase + autostash, abort on conflict, inject shellPath)
 // ---------------------------------------------------------------------------
 function syncPull(): void {
   try {
@@ -108,6 +169,7 @@ function syncPull(): void {
     try { gitSync("rebase --abort"); } catch { /* ignore */ }
     throw e;
   }
+  injectShellPath();
 }
 
 async function asyncPull(): Promise<void> {
@@ -117,12 +179,14 @@ async function asyncPull(): Promise<void> {
     try { await gitAsync("rebase --abort"); } catch { /* ignore */ }
     throw e;
   }
+  injectShellPath();
 }
 
 // ---------------------------------------------------------------------------
-// 5. Push with fast-forward retry
+// 6. Push (strip shellPath, commit, push with fast-forward retry)
 // ---------------------------------------------------------------------------
 function syncPush(): void {
+  stripShellPath();
   gitSync("add -A");
   if (!gitSync("status --porcelain")) return;
   gitSync(`commit -m "sync: ${new Date().toISOString()}"`);
@@ -135,6 +199,7 @@ function syncPush(): void {
 }
 
 async function asyncPush(): Promise<void> {
+  stripShellPath();
   await gitAsync("add -A");
   const status = await gitAsync("status --porcelain");
   if (!status) return;
@@ -148,7 +213,7 @@ async function asyncPush(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Minimal ExtensionAPI interfaces
+// 7. Minimal ExtensionAPI interfaces
 // ---------------------------------------------------------------------------
 interface SyncUi {
   notify?: (msg: string, level?: string) => void;
@@ -165,6 +230,7 @@ interface ExtensionLike {
   registerCommand: (
     name: string,
     def: {
+      description?: string;
       handler: (args: string, ctx: SyncCommandContext) => void | Promise<void>;
       getArgumentCompletions?: (arg: string) => SyncCompletion[] | null;
     },
@@ -172,7 +238,7 @@ interface ExtensionLike {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Tab completions
+// 8. Tab completions
 // ---------------------------------------------------------------------------
 const SUBS: SyncCompletion[] = [
   { label: "push", value: "push", description: "Commit & push to remote" },
@@ -189,7 +255,7 @@ function completions(arg: string): SyncCompletion[] | null {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Extension entry point
+// 9. Extension entry point
 // ---------------------------------------------------------------------------
 export default function (pi: ExtensionLike): void {
   let pushTimer: NodeJS.Timeout | undefined;
