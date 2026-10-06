@@ -44,6 +44,7 @@ async function gitAsync(args: string): Promise<string> {
   return stdout.trim();
 }
 
+
 // ---------------------------------------------------------------------------
 // 3. shellPath: keep machine-specific path out of synced configs
 // ---------------------------------------------------------------------------
@@ -275,6 +276,7 @@ interface ExtensionLike {
       getArgumentCompletions?: (arg: string) => SyncCompletion[] | null;
     },
   ) => void;
+  reload?: () => void;
 }
 
 /** Print status: try UI notify, always log to console. */
@@ -293,9 +295,6 @@ function completions(arg: string): SyncCompletion[] | null {
 // 9. Extension entry point
 // ---------------------------------------------------------------------------
 export default function (pi: ExtensionLike): void {
-  let pushTimer: NodeJS.Timeout | undefined;
-  const PUSH_DELAY = 2500;
-
   // Bootstrap (local-only, fast) – failures are non-fatal
   try {
     bootstrap();
@@ -303,40 +302,7 @@ export default function (pi: ExtensionLike): void {
     console.error(`[omp-sync] bootstrap warning: ${e}`);
   }
 
-  // First-machine bootstrap: commit + push if remote is empty
-  if (GIT_URL) {
-    (async () => {
-      if (!await remoteHasCommits()) {
-        console.log("[omp-sync] Remote empty – initial push…");
-        await asyncPush();
-        console.log("[omp-sync] Initial push complete");
-      }
-    })().catch((e) => console.error(`[omp-sync] initial push failed: ${e}`));
-  }
-
-  // --- Lifecycle hooks ---
-
-  pi.on("session_start", () => {
-    if (!GIT_URL) return;
-    asyncPull().catch(() => { /* non-blocking; next turn will retry */ });
-  });
-
-  pi.on("turn_end", () => {
-    if (!GIT_URL) return;
-    if (pushTimer) clearTimeout(pushTimer);
-    pushTimer = setTimeout(() => {
-      pushTimer = undefined;
-      asyncPush().catch((e) => console.error(`[omp-sync] push failed: ${e}`));
-    }, PUSH_DELAY);
-  });
-
-  pi.on("session_shutdown", () => {
-    if (pushTimer) { clearTimeout(pushTimer); pushTimer = undefined; }
-    if (!GIT_URL) return;
-    asyncPush().catch(() => { /* best effort */ });
-  });
-
-  // --- /sync command ---
+  // --- /sync command (manual only) ---
 
   pi.registerCommand("sync", {
     description: "Git sync: /sync [push|pull|status|test]",
@@ -358,6 +324,7 @@ export default function (pi: ExtensionLike): void {
           case "pull":
             status(ctx, "Pulling…");
             await asyncPull();
+            pi.reload?.();
             status(ctx, "Pull complete");
             break;
           case "status": {
