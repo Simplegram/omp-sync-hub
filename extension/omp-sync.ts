@@ -108,10 +108,10 @@ function migrateShellPath(): void {
 const GITIGNORE = [
   // Secrets & machine-specific
   ".env",
-  // SQLite databases
-  "agent.db",
-  "agent.db-wal",
-  "agent.db-shm",
+  // SQLite databases (all)
+  "*.db",
+  "*.db-wal",
+  "*.db-shm",
   // Large / machine-local directories
   "sessions/",
   "memories/",
@@ -130,12 +130,8 @@ const GITIGNORE = [
 /** Patterns to untrack from git index if previously committed. */
 const UNTRACK_PATTERNS = [
   ".env",
-  "agent.db",
-  "agent.db-wal",
-  "agent.db-shm",
   "sessions/",
   "memories/",
-  "extensions/omp-sync.ts",
   ".cache/",
   "tmp/",
 ];
@@ -298,18 +294,20 @@ export default function (pi: ExtensionLike): void {
   let pushTimer: NodeJS.Timeout | undefined;
   const PUSH_DELAY = 2500;
 
-  // Synchronous bootstrap (fast, local-only)
+  // Synchronous bootstrap (fast, local-only) – failures are non-fatal
   try {
     bootstrap();
   } catch (e) {
-    console.error(`[omp-sync] bootstrap failed: ${e}`);
-    return;
+    console.error(`[omp-sync] bootstrap warning: ${e}`);
   }
 
   // First-machine bootstrap: commit + push if remote is empty (async, non-blocking)
-  if (GIT_URL && !remoteHasCommits()) {
-    asyncPush().catch((e) => console.error(`[omp-sync] initial push failed: ${e}`));
-  }
+  try {
+    if (GIT_URL && !remoteHasCommits()) {
+      asyncPush().catch((e) => console.error(`[omp-sync] initial push failed: ${e}`));
+    }
+  } catch { /* non-fatal */ }
+
 
   // --- Lifecycle hooks ---
 
